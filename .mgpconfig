@@ -1,0 +1,25 @@
+[project "odp-m"]
+  mode = write
+  branch = odp-devel
+
+[plugin]
+  common = \\\\fileril109\\cc\\git\\config\\mgpmenu.config
+
+[variables]
+  set = bin_dir                = \\\\fileril109.marvell.com\\cc\\git\\bin
+  set = perl_exe               = \\\\fileril109.marvell.com\\cc\\as\\perl\\bin\\perl.exe
+  set = version_file           = %project_root%\\version.txt
+  set = configuration_file     = %project_root%\\configuration.txt
+  set = automatic_resolve_file = %project_root%\\arf.txt
+  set = bl_ver_template        = %project_root%\\.templates\\bl_version.template
+  set = bl_body_template       = %project_root%\\.templates\\bl_body.template
+  set = bl_mail_list           = %project_root%\\.templates\\makebaseline_mail.txt
+  set = bl_body                = %project_root%\\.bl_body
+  
+[trigger "makebaseline"]
+  pre  = %bin_dir%\\ConfigureProject.exe -tag %tag_name% -output \"%configuration_file%\"
+  pre  = %bin_dir%\\ReleaseSummary.exe -templates \"%bl_ver_template%\",\"%bl_body_template%\" -output \"%version_file%\",\"%bl_body%\" -project_root \"%project_root%\" -rw_components %rw_components% -tag_name %tag_name% -no_cq
+  pre  = cd %project_root% & git add version.txt configuration.txt
+  pre  = %bin_dir%\\gerrit_submit.exe -project_root \"%project_root%\" -project_name %project_name% -rw_components %rw_components% -branch %branch% -gerrit_host %gerrit_host%
+
+  post = %bin_dir%\\SendMail.exe -mailing_list \"%bl_mail_list%\" -body \"%bl_body%\" -att \"%version_file%\" -att \"%configuration_file%\"

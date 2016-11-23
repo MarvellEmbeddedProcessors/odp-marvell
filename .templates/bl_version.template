@@ -1,0 +1,24 @@
+Tag  : [% Tag %]
+Date : [% Date %]
+
+BRIEF DESCRIPTION
+
+[% FOREACH commit IN Commits -%]
+[% commit.Owner %] : [% commit.Headline %]
+[% END -%]
+
+DETAILED DESCRIPTION
+
+[% FOREACH commit IN Commits -%]
+- Author   :  [% commit.Author %]
+- Owner    :  [% commit.Owner %] ([% commit.Commiter %])
+- Name     :  [% commit.Headline %]
+- Date     :  [% commit.Date %]
+- Comments :  [% commit.Comment %]
+- Files    :
+[% FOREACH file IN commit.Files -%]
+         [% file %]
+[% END -%]
+-----------------------------------------------------
+[% END -%]
+

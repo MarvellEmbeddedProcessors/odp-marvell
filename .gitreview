@@ -1,0 +1,7 @@
+[gerrit]
+host=vgitil10.il.marvell.com
+port=29418
+project=syssw/odp-m
+defaultbranch=odp-devel
+defaultremote=origin
+defaultrebase=0
