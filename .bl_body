@@ -1,0 +1,52 @@
+New baseline ODP-DEVEL_000 created on branch odp-devel
+
+<HTML>
+<HEAD>
+<STYLE TYPE="text/css">
+  BODY { font-size:80%; font-family:Lucida,Verdana; color:black; background-color:#FFFFFF; }
+  TABLE.brief { font-size:100%; border:0px; border-collapse:collapse; white-space:nowrap; }
+  TD.brief { border-spacing:0px; padding:0px 12px 1px 3px; border:0px; border-collapse:collapse; min-width:1.2em; }
+  TD.bold { border-spacing:0px; padding:0px 12px 1px 3px; border:0px; border-collapse:collapse; min-width:1.2em; color:navy; font-weight:bold;}
+  TABLE.detailed { font-size:100%; border:2px solid #666666; border-collapse:collapse; white-space:nowrap; }
+  TD.headline { border-spacing:0px; padding:3px 12px 3px 12px; border:0px; border-collapse:collapse; min-width:1.2em; background-color:#CCCCCC; color:navy; }
+  TD.detail1 { border-spacing:0px; padding:3px 12px 3px 40px; border:0px; border-collapse:collapse; min-width:1.2em; }
+  TD.detail2 { border-spacing:0px; padding:3px 12px 3px 12px; border:0px; border-collapse:collapse; min-width:1.2em; }
+  PRE { font-size:100%; font-family:Lucida,Verdana; }
+</STYLE>
+</HEAD>
+
+<BODY>
+<P></P>
+
+<TABLE CLASS="brief">
+<TR>
+  <TD>Tag:</TD><TD CLASS="bold">ODP-DEVEL_000</TD>
+</TR>
+<TR>
+  <TD>Date:</TD><TD CLASS="bold">Wed Nov 23 10:16:29 2016</TD>
+</TR>
+</TABLE>
+<P></P>
+
+<HR>
+
+<H3>BRIEF DESCRIPTION</H3>
+
+<TABLE CLASS="brief">
+</TABLE>
+<P></P><P></P>
+<HR>
+
+<H3>DETAILED DESCRIPTION</H3>
+
+<TABLE CLASS="detailed">
+</TABLE>
+
+<HR>
+
+<P><I>Best regards,<BR>
+integrator of branch odp-devel in project tools
+</I></P>
+
+</BODY>
+</HTML>
