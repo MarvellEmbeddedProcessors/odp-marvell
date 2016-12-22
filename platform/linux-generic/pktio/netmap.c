@@ -930,6 +930,7 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 				uint32_t rbuf_idx;
 				uint16_t rdata_offs;
 				struct netmap_slot *rs, *ts;
+				odp_packet_hdr_t *pkt_hdr = odp_packet_hdr(pkt);
 
 				/* Update the cur pointer to the tail and then update the slot_id */
 				ring->cur = ring->tail;
@@ -956,6 +957,25 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 				/* report the buffer change. */
 				ts->flags |= NS_BUF_CHANGED;
 				rs->flags |= NS_BUF_CHANGED;
+				/* Update the slot for csum_offload */
+				if ((pkt_hdr->p.l3_offset != ODP_PACKET_OFFSET_INVALID) &&
+					(pkt_hdr->p.l4_offset != ODP_PACKET_OFFSET_INVALID)) {
+					ts->csum_offload.l3_offset = pkt_hdr->p.l3_offset;
+					ts->csum_offload.ip_hdr_len = (pkt_hdr->p.l4_offset-pkt_hdr->p.l3_offset)>>2;
+					if (pkt_hdr->p.input_flags.ipv4)
+						ts->csum_offload.l3_type = CSUM_OFFLOAD_L3_TYPE_IPV4;
+					else if (pkt_hdr->p.input_flags.ipv6)
+						ts->csum_offload.l3_type = CSUM_OFFLOAD_L3_TYPE_IPV6;
+					else
+						ts->csum_offload.l3_type = 0;
+
+					if (pkt_hdr->p.input_flags.tcp)
+						ts->csum_offload.l4_type = CSUM_OFFLOAD_L4_TYPE_TCP;
+					else if (pkt_hdr->p.input_flags.udp)
+						ts->csum_offload.l4_type = CSUM_OFFLOAD_L4_TYPE_UDP;
+					else
+						ts->csum_offload.l4_type = 0;
+				}
 #ifdef BUF_ZERO_COPY_CHECKS
 				total_tx[rring->ringid]++;
 				if (rring->head == rring->cur) {
