@@ -1,0 +1,352 @@
+:doctitle: OpenDataPlane (ODP) Release-Guide
+:description: This document is intended to guide a new OpenDataPlane +
+application developer in understanding the git work flow of the project
+:imagesdir: ../images
+:toc:
+
+:numbered!:
+[abstract]
+Abstract
+--------
+This document is intended to guide a new application developer in understanding
+the git work flow of the project, it relates only to the ODP API work and its
+supporting software reference implementation.
+
+Further details about ODP may be found at the http://opendataplane.org[ODP]
+home page.
+
+:numbered:
+
+== Release Plan ==
+The point and Major (API) releases are on separate cycles with changes that are
+potentially backwards incompatible happening at lower frequency. Generation
+releases are significantly less frequent. The specific digits used for the
+generation and version numbering are described in the ODP API Documentation.
+The roles referenced in this document are defined in the
+http://www.opendataplane.org/api-documentation/by-laws/[By-laws].
+
+=== Patch to release flow ===
+Changes to the API are staged in api-next until they have been sufficiently
+reviewed and have met the criteria for inclusion into master for the ODP API.
+These new API changes are then staged in next until a release point in master
+where a major release is to be made and applied atomically, this flow can be
+seen in Figure 1.
+
+.Overview of the ODP git process
+image::simple_release_git.svg[align="center"]
+
+Regular bug fixes, and implementation changes occur directly to master.
+
+
+[[anchor-1]]
+== Branch acceptance criteria ==
+ODP has three branches one for general bug fixes and improvements on
+linux-generic, testing and examples (master). The second branch is for API
+development, it contains proposed API changes (api-next) before they are
+committed to master. The third is a staging area (next) to gather api-next
+cherry picked work so that it may be applied to master on release day, this can
+be seen in detail in Figure 2.
+
+.Overview of the ODP git process
+image::release_git.svg[align="center"]
+
+=== api-next ===
+acceptance criteria for patches to api-next (path 1):
+
+* code compiles
+* no regressions introduced
+* a new API definition in odp/include may be accepted without an implementation
+or tests
+* any change to the documentation in odp/include should by default be applied to
+api-next but exceptions for simple fixes are allowed
+
+=== next ===
+acceptance criteria for patches from api-next to next (path 2):
+
+* code compiles
+* no regressions introduced
+* the new API has relevant validation tests and tests must pass in the CI loop
+* all new APIs have to be approved by the Release Manager to be cherry picked
+to next branch
+* patches cannot be accepted directly into next
+
+=== master ===
+acceptance criteria for patches to master (path 4):
+
+* all changes that do not affect odp/include may be directly applied to master
+** bug fixes
+** improvements
+
+== Repository management ==
+The following describes the behavior to be expected in the branches of the
+repository.
+
+All patches are acknowledged on the list as soon as they have been applied to
+the repository.
+No patch may be accepted that knowingly breaks git bisect.
+
+=== api-next ===
+* api-next is always rebased on top of master when there is a release point in
+master
+* an API change being accepted into api-next is not a guarantee that it will
+one day make it into the released API. This is a staging branch and changes may
+be reverted without ever being merged
+* changes that introduce a regression in compilation or execution need to be
+justified
+* api-next is = latest master + these proposed API changes
+* all patches that apply to the code in odp/include must be applied to api-next
+first
+* an applied patch that is later justified can be cherry picked to master
+without waiting for a Major or Generation release if it is shown to not be a
+backwards compatibility issue
+
+=== next ===
+* next is always rebased on top of master at each release point in master
+* new APIs are cherry picked into next from api-next when approved by the
+Release Manager and Maintainer
+
+=== master ===
+* tagging is only done when the Release Manager and Maintainers agree
+* this branch is released at a period approximately once a month
+* this branch will never have its history rewritten
+* code is merged on release day from next to master, tagged and released as
+atomically as possible
+* the maintainer assures that there are not obvious regressions
+* the maintainer generates the API change log
+* the maintainer updates the version number
+* the maintainer tags the master branch
+
+=== Long Term Support (LTS)
+ODP is portable at two levels, at a recompiled common API level for maximum
+performance, and in a more portable way at an ABI level which may sacrifice
+some performance.
+
+==== odp-linux API and APB compatibility
+In the odp-linux case, the Linux Operating System (OS) provides a mechanism for
+ensuring ABI compatibility with the .so naming for shared libraries. This OS
+specific number provides different definitions for the digits to the ODP API
+version definition and will likely differ. Other OS'es may use other schemes.
+
+==== Vendor implementations
+Vendors of ODP are said to be compatible with the ODP API if the implementation
+can pass the validation test suite for the API. This means that supporting the
+ABI mode is not required; a statically built and executed test suite is all that
+is required.
+
+==== API compatibility
+ODP allows implementations of the API to modify the structures. In this case
+application portability is maintained through access functions to the data rather
+than direct structure access. In an embedded use case this allows maximum
+performance with the hardware structures mapping directly to the data structures
+manipulated by the CPU. Applications are compiled for the target
+system directly and are usually statically linked.
+
+==== ABI compatibility
+In non-embedded environments where a possible performance penalty can be more
+acceptable a shared library is likely to be used and it must maintain ABI
+compatibility across that architecture. In this case applications do not require
+recompiling.
+
+===== Checking which .so version number is required on change
+To determine if the .so number should be changed the check-odp tool can provide
+the answer. This tool provides a command line summary and a detailed html
+analysis. This tool is based on the abi-compliance-checker
+
+[source,bash]
+----
+COMPARE_BRANCH=monarch_lts ./diff-abi.sh
+
+...
+preparation, please wait ...
+comparing ABIs ...
+comparing APIs ...
+creating compatibility report ...
+result: COMPATIBLE
+total "Binary" compatibility problems: 0, warnings: 0
+total "Source" compatibility problems: 0, warnings: 0
+....
+----
+
+== Releases ==
+All releases are from a tag in the master branch of the ODP git
+repository. Recall that ODP consists of three separate components:
+
+* An API Specification
+* Multiple independently owned and maintained _implementations_ of the ODP API
+* A Validation Test Suite that tests implementation conformance to the ODP API
+
+Included with the main ODP git repository is the `odp-linux` reference
+implementation of the ODP API, and it also has an associated service stream
+that is independent of all other ODP implementations. This means that the ODP
+release naming conventions address the needs of all three of these components,
+which is accomplished via a multi-level structure using the format:
+
+*v<Generation>.<Major>.<Minor>.<Point>*
+
+This is used as the tag from which all ODP releases are published and is also
+used as the release identifier in the CHANGELOG for each release.  The first
+three of these digits represent the ODP API level, and these reflect three
+types of API changes with differing frequencies and impact to applications and
+other ODP implementations. A fourth digit is used to reflect changes to other
+items included within the ODP git repository. In addition, each individual ODP
+implementation will have its own service stream identifier that is defined
+using whatever conventions meet its needs.
+
+=== Generation releases ===
+A generation release indicates a major completion of work, and a possible
+change in direction for the API. Generation release changes are approved by the
+LNG Steering Committee, which is the governing body for ODP.
+
+=== Major releases ===
+Major (API) releases are used when new APIs or capabilities are introduced or
+changes are made to existing APIs that are not backwards-compatible. Major
+release changes thus potentially affect ODP applications as well as
+implementations.
+
+=== Minor releases ===
+Minor (API) releases are used when new APIs or capabilities are introduced or
+changes are made to existing APIs in a backwards-compatible manner. Examples
+of these might be wording changes in API documentation, or introducing new
+APIs that are orthogonal to the existing set of APIs and hence have no impact
+on existing applications that do not make use of them. Minor release changes
+should therefore have no impact on existing ODP applications but will have
+impact for ODP implementations that need to support these API additions and
+changes.
+
+NOTE: The first three digits of the release name are the API version returned
+by the `odp_version_api_str()` API.
+
+=== Point releases ===
+General bug fixes and other non API altering changes are gathered and a
+release made every month if sufficient change has accumulated. Examples of a
+point release would be additional documentation, extensions or corrections to
+the validation test suite, additions or corrections to helpers, example
+programs, etc. No API changes are permitted in a point release, so ODP
+applications are not impacted.  Other ODP implementations _may_ be impacted
+if, for example, a bug is fixed in a validation test that results in a latent
+bug in other implementations being exposed.
+
+=== Implementation Service Strings ===
+Beyond the four-digit release name, platform specific free form text is used
+to capture the service level of each ODP implementation. This field is for the
+sole use of implementations to represent their individual service streams. Its
+format may vary between implementations. For example, the `odp-linux`
+reference implementation uses a simple incrementing digit (0, 1, 2,
+etc.). Other implementations may use `Build xxxx` or something similar.
+Changes in this designator have no impact on and may be ignored by other ODP
+implementations. The only changes that ODP applications should see is
+corrected functional or performance behavior when running on that specific ODP
+implementation.
+
+NOTE: The full four-digit release name plus implementation service string as
+well as other platform-specific identification information is returned by the
+`odp_version_impl_str()` API. This may be useful, for example, in logging an
+error to include in a bug report to the vendor that owns and supports this ODP
+implementation. The release-independent name of a given implementation (for
+identification purposed) is supplied by the `odp_version_impl_name()` API.
+
+== Deprecating part of the API
+Deleting or changing the published API follows the normal <<anchor-1,process>>, with the following additional rules:
+
+* A deprecated indication is applied to the old API using the @deprecated
+doxygen syntax.
+* For a function change the old API it is additionally marked using the
+ODP_DEPRECATED preprocessor macro.
+* The CHANGELOG will have an entry in the API change section.
+* The Release Manager will resolve the duration for which the deprecated API.
+will be supported, and determine which future release it will be applied to. +
+
+The more complex use cases are elaborated below.
+
+=== Changing  a function
+A new function will be added with the new behavior. The old function will remain and be marked by both a documentation entry and a compiler warning.
+For a function change the new API will be used in the examples, test/performance and
+test/miscellaneous directories.
+The new API must have comparable coverage to the old API.
+
+
+[source,c]
+----
+/**
+ * Create a foo
+ *
+ * @deprecated This API needs to take a count and will be deleted.
+ * The replacement API will be odp_bar_create();
+ *
+ * @param name ...
+ */
+odp_foo_t odp_foo_create(const char *name) ODP_DEPRECATED;
+
+/**
+ * Create a bar
+ *
+ * @param name ...
+ */
+odp_foo_t odp_bar_create(const char *name, int count);
+----
+
+=== Deleting a function
+When deleting a function it will be be indicated in the documentation and via a
+compiler warning.
+
+[source,c]
+----
+/**
+ * Create a foo
+ *
+ * @deprecated This API will be removed because platforms now take care of this
+ *
+ * @param name ...
+ */
+odp_foo_t odp_foo_create(const char *name) ODP_DEPRECATED;
+----
+
+=== Changing a struct member
+When changing a struct member it will be indicated in the documentation.
+
+[source,c]
+----
+/**
+ * An initialization struct
+ */
+typedef struct foo_init_t {
+	/** Maximum number of worker threads */
+	int num_worker;
+
+	/**
+	 * Maximum number of control threads
+	 * @deprecated this is now number_of_control
+	 */
+	int num_control;
+	int other_items;
+	int number_of_control;
+----
+
+The implementation of the structs initialization function must be updated to cover the new element.
+[source,c]
+----
+void odp_foo_param_init(foo_init_t param) {
+	...
+	param->number_of_control = 20;
+}
+----
+
+=== Deleting a struct member
+When deleting a struct member it will be indicated in the documentation.
+
+[source,c]
+----
+/**
+ * An initialization struct
+ */
+typedef struct foo_init_t {
+	/** Maximum number of worker threads */
+	int num_worker;
+
+	/**
+	 * Maximum number of control threads
+	 * @deprecated this is no longer needed, it is automatically inferred.
+	 */
+	int num_control;
+	int other_items;
+----
