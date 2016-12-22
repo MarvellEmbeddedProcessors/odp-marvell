@@ -37,8 +37,9 @@ typedef union {
 
 /** Netmap ring slot */
 typedef struct  {
-	char *buf;	/**< Slot buffer pointer */
-	uint16_t len;	/**< Slot length */
+	char *buf;		/**< Slot buffer pointer */
+	uint16_t data_offs;	/**< Slot data offset */
+	uint16_t len;		/**< Slot length */
 } netmap_slot_t;
 
 /** Packet socket using netmap mmaped rings for both Rx and Tx */

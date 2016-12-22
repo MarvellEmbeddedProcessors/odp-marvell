@@ -610,12 +610,14 @@ static inline int netmap_pkt_to_odp(pktio_entry_t *pktio_entry,
 
 	for (i = 0; i < num; i++) {
 		netmap_slot_t slot;
+		char *buf;
 		uint16_t len;
 
 		slot = slot_tbl[i];
+		buf = slot.buf + slot.data_offs;
 		len = slot.len;
 
-		odp_prefetch(slot.buf);
+		odp_prefetch(buf);
 
 		if (odp_unlikely(len > pktio_entry->s.pkt_nm.max_frame_len)) {
 			ODP_ERR("RX: frame too big %" PRIu16 " %zu!\n", len,
@@ -630,7 +632,7 @@ static inline int netmap_pkt_to_odp(pktio_entry_t *pktio_entry,
 
 		if (pktio_cls_enabled(pktio_entry)) {
 			if (cls_classify_packet(pktio_entry,
-						(const uint8_t *)slot.buf, len,
+						(const uint8_t *)buf, len,
 						len, &pool, &parsed_hdr))
 				goto fail;
 		}
@@ -641,7 +643,7 @@ static inline int netmap_pkt_to_odp(pktio_entry_t *pktio_entry,
 
 		/* For now copy the data in the mbuf,
 		   worry about zero-copy later */
-		if (odp_packet_copy_from_mem(pkt, 0, len, slot.buf) != 0)
+		if (odp_packet_copy_from_mem(pkt, 0, len, buf) != 0)
 			goto fail;
 
 		pkt_hdr->input = pktio_entry->s.handle;
@@ -691,6 +693,7 @@ static inline int netmap_recv_desc(pktio_entry_t *pktio_entry,
 			buf = NETMAP_BUF(ring, ring->slot[slot_id].buf_idx);
 
 			slot_tbl[num_rx].buf = buf;
+			slot_tbl[num_rx].data_offs = ring->slot[slot_id].data_offs;
 			slot_tbl[num_rx].len = ring->slot[slot_id].len;
 			num_rx++;
 
@@ -812,6 +815,7 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 			ring->slot[slot_id].len = pkt_len;
 
 			buf = NETMAP_BUF(ring, ring->slot[slot_id].buf_idx);
+			buf += ring->slot[slot_id].data_offs;
 
 			if (odp_packet_copy_to_mem(pkt, 0, pkt_len, buf)) {
 				i = NM_INJECT_RETRIES;
