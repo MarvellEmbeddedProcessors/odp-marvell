@@ -36,6 +36,8 @@
 
 #define NM_WAIT_TIMEOUT 10 /* netmap_wait_for_link() timeout in seconds */
 #define NM_INJECT_RETRIES 10
+#define BUSY_WAIT
+
 
 static int disable_pktio; /** !0 this pktio disabled, 0 enabled */
 static int netmap_stats_reset(pktio_entry_t *pktio_entry);
@@ -724,13 +726,19 @@ static int netmap_recv(pktio_entry_t *pktio_entry, int index,
 	int num_desc = pkt_nm->rx_desc_ring[index].s.num;
 	int i;
 	int num_rx = 0;
+#ifdef BUSY_WAIT
+	struct pollfd polld;
+#else
 	int max_fd = 0;
 	fd_set empty_rings;
+#endif /* BUSY_WAIT */
 
 	if (odp_unlikely(pktio_entry->s.state != PKTIO_STATE_STARTED))
 		return 0;
 
+#ifndef BUSY_WAIT
 	FD_ZERO(&empty_rings);
+#endif /* !BUSY_WAIT */
 
 	if (!pkt_nm->lockless_rx)
 		odp_ticketlock_lock(&pkt_nm->rx_desc_ring[index].s.lock);
@@ -747,20 +755,30 @@ static int netmap_recv(pktio_entry_t *pktio_entry, int index,
 					   &pkt_table[num_rx], num - num_rx);
 
 		if (num_rx != num) {
+#ifdef BUSY_WAIT
+			polld.fd = desc->fd;
+			polld.events = polld.revents = 0;
+			ioctl(polld.fd, NIOCRXSYNC, NULL);
+			if (polld.revents & POLLERR)
+				ODP_ERR("RX: sync error\n");
+#else
 			FD_SET(desc->fd, &empty_rings);
 			if (desc->fd > max_fd)
 				max_fd = desc->fd;
+#endif /* BUSY_WAIT */
 		}
 		desc_id++;
 	}
 	pkt_nm->rx_desc_ring[index].s.cur = desc_id;
 
+#ifndef BUSY_WAIT
 	if (num_rx != num) {
 		struct timeval tout = {.tv_sec = 0, .tv_usec = 0};
 
 		if (select(max_fd + 1, &empty_rings, NULL, NULL, &tout) == -1)
 			ODP_ERR("RX: select error\n");
 	}
+#endif /* !BUSY_WAIT */
 	if (!pkt_nm->lockless_rx)
 		odp_ticketlock_unlock(&pkt_nm->rx_desc_ring[index].s.lock);
 
@@ -807,7 +825,11 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 		}
 		for (i = 0; i < NM_INJECT_RETRIES; i++) {
 			if (nm_ring_empty(ring)) {
+#ifdef BUSY_WAIT
+				ioctl(polld.fd, NIOCTXSYNC, NULL);
+#else
 				poll(&polld, 1, 0);
+#endif /* BUSY_WAIT */
 				continue;
 			}
 			slot_id = ring->cur;
@@ -829,7 +851,11 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 			break;
 	}
 	/* Send pending packets */
+#ifdef BUSY_WAIT
+	ioctl(polld.fd, NIOCTXSYNC, NULL);
+#else
 	poll(&polld, 1, 0);
+#endif /* BUSY_WAIT */
 
 	if (!pkt_nm->lockless_tx)
 		odp_ticketlock_unlock(&pkt_nm->tx_desc_ring[index].s.lock);
