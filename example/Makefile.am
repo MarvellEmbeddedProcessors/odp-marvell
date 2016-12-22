@@ -5,6 +5,7 @@ SUBDIRS = classifier \
 	  l2fwd_simple \
 	  bridge \
 	  l3fwd \
+	  nat \
 	  packet \
 	  switch \
 	  time \
