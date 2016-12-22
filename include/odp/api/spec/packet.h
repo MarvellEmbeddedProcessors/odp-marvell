@@ -323,7 +323,16 @@ void *odp_packet_offset(odp_packet_t pkt, uint32_t offset, uint32_t *len,
  * @param      offset   Byte offset into packet data
  * @param      len      Number of bytes to prefetch starting from 'offset'
  */
-void odp_packet_prefetch(odp_packet_t pkt, uint32_t offset, uint32_t len);
+//void odp_packet_prefetch(odp_packet_t pkt, uint32_t offset, uint32_t len);
+static inline void odp_packet_prefetch(odp_packet_t pkt,
+				       uint32_t offset,
+				       uint32_t len)
+{
+	char *ptr = (char *)odp_packet_data(pkt)+offset;
+	__asm__ volatile("prfm pldl1keep, %a0\n" : : "p" (ptr));
+	if (len > 64)
+		__asm__ volatile("prfm pldl1keep, %a0\n" : : "p" (ptr+64));
+}
 
 /**
  * Push out packet head
