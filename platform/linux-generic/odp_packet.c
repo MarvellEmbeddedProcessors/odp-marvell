@@ -15,6 +15,7 @@
 #include <protocols/tcp.h>
 #include <protocols/udp.h>
 
+#include <ctype.h>	/* isprint() */
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
@@ -925,6 +926,21 @@ int odp_packet_move_data(odp_packet_t pkt, uint32_t dst_offset,
  *
  */
 
+static void mv_mem_dump(const unsigned char *p, unsigned int len)
+{
+	unsigned int i = 0, j;
+
+	while (i < len) {
+		j = 0;
+		printf("%10p: ", (p + i));
+		for (j = 0 ; j < 32 && i < len ; j++) {
+			printf("%02x ", p[i]);
+			i++;
+		}
+		printf("\n");
+	}
+}
+
 void odp_packet_print(odp_packet_t pkt)
 {
 	int max_len = 512;
@@ -956,6 +972,8 @@ void odp_packet_print(odp_packet_t pkt)
 	str[len] = '\0';
 
 	ODP_PRINT("\n%s\n", str);
+
+	mv_mem_dump(odp_packet_data(pkt), odp_packet_len(pkt));
 }
 
 int odp_packet_is_valid(odp_packet_t pkt)
