@@ -65,6 +65,10 @@ typedef struct pool_local_t {
 
 static __thread pool_local_t local;
 
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+int (*ext_buf_free_cb)(odp_buffer_t buf) = NULL;
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+
 static void flush_cache(local_cache_t *buf_cache, struct pool_entry_s *pool);
 
 int odp_pool_init_global(void)
@@ -1029,6 +1033,17 @@ void buffer_free(uint32_t pool_id, const odp_buffer_t buf)
 	odp_buffer_hdr_t *buf_hdr;
 
 	buf_hdr = odp_buf_to_hdr(buf);
+
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+	if (is_ext_buffer(buf_hdr)) {
+		if (!ext_buf_free_cb)
+			printf("ERROR: got extenral invalid buff! ignoring (oooppps, we have a leak ...)\n");
+		else
+			ext_buf_free_cb(buf);
+		return;
+	}
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+
 	ODP_ASSERT(buf_hdr->allocator != ODP_FREEBUF);
 	buf_hdr->allocator = ODP_FREEBUF;
 
