@@ -46,7 +46,7 @@
 /** @def MAX_PKT_BURST
  * @brief Maximum number of packet in a burst
  */
-#define MAX_PKT_BURST          32
+#define MAX_PKT_BURST          127
 
 /** Maximum number of pktio queues per interface */
 #define MAX_QUEUES             32
