@@ -25,7 +25,7 @@
 
 #define POOL_NUM_PKT	8192
 #define POOL_SEG_LEN	1856
-#define MAX_PKT_BURST	32
+#define MAX_PKT_BURST	64
 
 #define MAX_NB_WORKER	32
 #define MAX_NB_PKTIO	32
@@ -34,7 +34,7 @@
 #define MAX_NB_ROUTE	32
 
 #define INVALID_ID	(-1)
-#define PRINT_INTERVAL	10	/* interval seconds of printing stats */
+#define PRINT_INTERVAL	1	/* interval seconds of printing stats */
 
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
@@ -964,6 +964,7 @@ int main(int argc, char **argv)
 
 	/* Clear global argument and initialize the dest mac as 2:0:0:0:0:x */
 	memset(&global, 0, sizeof(global));
+	memset(mac,0,ODPH_ETHADDR_LEN);
 	mac[0] = 2;
 	for (i = 0; i < MAX_NB_PKTIO; i++) {
 		mac[ODPH_ETHADDR_LEN - 1] = (uint8_t)i;
