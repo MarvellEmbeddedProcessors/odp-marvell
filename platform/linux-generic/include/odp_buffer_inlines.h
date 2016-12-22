@@ -20,6 +20,13 @@ extern "C" {
 #include <odp_buffer_internal.h>
 #include <odp_pool_internal.h>
 
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+static inline int is_ext_buffer(odp_buffer_hdr_t *hdr)
+{
+	return !!hdr->netmap_buf_inf.orig_buf;
+}
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+
 static inline odp_buffer_t odp_buffer_encode_handle(odp_buffer_hdr_t *hdr)
 {
 	odp_buffer_bits_t handle;
@@ -188,6 +195,42 @@ static inline void _odp_buffer_event_type_set(odp_buffer_t buf, int ev)
 {
 	odp_buf_to_hdr(buf)->event_type = ev;
 }
+
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+static inline void seg_swap_ext_buf(odp_buffer_hdr_t	*buf_hdr,
+				    void		*buf,
+				    uint32_t		 size,
+				    struct netmap_ring	*ring,
+				    uint32_t		 buf_idx,
+				    uint16_t		 data_offs
+				   )
+{
+	buf_hdr->netmap_buf_inf.orig_buf = buf_hdr->addr[0];
+	buf_hdr->addr[0] = buf;
+	buf_hdr->netmap_buf_inf.orig_size = buf_hdr->size;
+	buf_hdr->size = size;
+	buf_hdr->netmap_buf_inf.orig_num_segs = buf_hdr->segcount;
+	buf_hdr->segcount = 1;
+	buf_hdr->netmap_buf_inf.ring = ring;
+	buf_hdr->netmap_buf_inf.buf_idx = buf_idx;
+	buf_hdr->netmap_buf_inf.data_offs = data_offs;
+}
+
+static inline void seg_swap_orig_buf(odp_buffer_hdr_t	 *buf_hdr,
+				     struct netmap_ring	**ring,
+				     uint32_t		 *buf_idx,
+				     uint16_t		 *data_offs
+				    )
+{
+	buf_hdr->addr[0] = buf_hdr->netmap_buf_inf.orig_buf;
+	buf_hdr->netmap_buf_inf.orig_buf = NULL;
+	buf_hdr->size = buf_hdr->netmap_buf_inf.orig_size;
+	buf_hdr->segcount = buf_hdr->netmap_buf_inf.orig_num_segs;
+	*ring = buf_hdr->netmap_buf_inf.ring;
+	*buf_idx = buf_hdr->netmap_buf_inf.buf_idx;
+	*data_offs = buf_hdr->netmap_buf_inf.data_offs;
+}
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 
 #ifdef __cplusplus
 }

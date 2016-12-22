@@ -37,10 +37,51 @@
 #define NM_WAIT_TIMEOUT 10 /* netmap_wait_for_link() timeout in seconds */
 #define NM_INJECT_RETRIES 10
 #define BUSY_WAIT
+/* #define BUF_ZERO_COPY_CHECKS */
+#ifndef MV_NETMAP_BUF_ZERO_COPY
+#undef BUF_ZERO_COPY_CHECKS
+#endif /* !MV_NETMAP_BUF_ZERO_COPY */
 
 
 static int disable_pktio; /** !0 this pktio disabled, 0 enabled */
 static int netmap_stats_reset(pktio_entry_t *pktio_entry);
+
+#ifdef BUF_ZERO_COPY_CHECKS
+#define NM_MAX_NUM_QUEUES
+uint64_t total_rx[NM_MAX_NUM_QUEUES] = {};
+uint64_t total_tx[NM_MAX_NUM_QUEUES] = {};
+#endif /* BUF_ZERO_COPY_CHECKS */
+
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+extern int (*ext_buf_free_cb)(odp_buffer_t buf);
+
+static int netmap_pkt_free(odp_buffer_t buf)
+{
+	struct netmap_ring	*ring;
+	uint32_t		 buf_idx;
+	uint16_t		 data_offs;
+
+	if (!is_ext_buffer(odp_buf_to_hdr(buf))) {
+		ODP_ERR("Not a netmap buffer!\n");
+		return -1;
+	}
+
+	seg_swap_orig_buf(odp_buf_to_hdr(buf), &ring, &buf_idx, &data_offs);
+
+	odp_buffer_free(buf);
+
+	if (ring->head == ring->cur) {
+		printf("WARN: missmatch in buffers (head=curr %d)!!\n", ring->cur);
+		return 0;
+	}
+
+	/* in case we need to copy buffer, we can release it now back to netmap */
+	ring->slot[ring->head].buf_idx = buf_idx;
+	ring->head = nm_ring_next(ring, ring->head);
+
+	return 0;
+}
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 
 static int netmap_do_ioctl(pktio_entry_t *pktio_entry, unsigned long cmd,
 			   int subcmd)
@@ -365,7 +406,7 @@ static int netmap_open(odp_pktio_t id ODP_UNUSED, pktio_entry_t *pktio_entry,
 	snprintf(pkt_nm->if_name, sizeof(pkt_nm->if_name), "%s", netdev);
 
 	/* Dummy open here to check if netmap module is available and to read
-	 * capability info. */
+	 * capability info.*/
 	desc = nm_open(pkt_nm->nm_name, NULL, 0, NULL);
 	if (desc == NULL) {
 		ODP_ERR("nm_open(%s) failed\n", pkt_nm->nm_name);
@@ -406,8 +447,10 @@ static int netmap_open(odp_pktio_t id ODP_UNUSED, pktio_entry_t *pktio_entry,
 	}
 	pkt_nm->sockfd = sockfd;
 
-	/* Use either interface MTU (+ ethernet header length) or netmap buffer
-	 * size as MTU, whichever is smaller. */
+	/*
+	* Use either interface MTU (+ ethernet header length) or netmap buffer
+	* size as MTU, whichever is smaller.
+	*/
 	mtu = mtu_get_fd(pktio_entry->s.pkt_nm.sockfd, pkt_nm->if_name);
 	if (mtu == 0) {
 		ODP_ERR("Unable to read interface MTU\n");
@@ -445,6 +488,10 @@ static int netmap_open(odp_pktio_t id ODP_UNUSED, pktio_entry_t *pktio_entry,
 
 	(void)netmap_stats_reset(pktio_entry);
 
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+	ext_buf_free_cb = netmap_pkt_free;
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+
 	return 0;
 
 error:
@@ -464,8 +511,7 @@ static int netmap_start(pktio_entry_t *pktio_entry)
 	odp_pktin_mode_t in_mode = pktio_entry->s.param.in_mode;
 	odp_pktout_mode_t out_mode = pktio_entry->s.param.out_mode;
 
-	/* If no pktin/pktout queues have been configured. Configure one
-	 * for each direction. */
+	/* If no pktin/pktout queues have been configured. Configure one for each direction. */
 	if (!pktio_entry->s.num_in_queue &&
 	    in_mode != ODP_PKTIN_MODE_DISABLED) {
 		odp_pktin_queue_param_t param;
@@ -493,8 +539,7 @@ static int netmap_start(pktio_entry_t *pktio_entry)
 
 	/* Map pktin/pktout queues to netmap rings */
 	if (pktio_entry->s.num_in_queue) {
-		/* In single queue case only one netmap descriptor is
-		 * required. */
+		/* In single queue case only one netmap descriptor is required. */
 		num_rx_desc = (pktio_entry->s.num_in_queue == 1) ? 1 :
 				pkt_nm->num_rx_rings;
 
@@ -604,6 +649,9 @@ static inline int netmap_pkt_to_odp(pktio_entry_t *pktio_entry,
 	int i;
 	int num;
 	int alloc_len;
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+	int headroom;
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 
 	/* Allocate maximum sized packets */
 	alloc_len = pktio_entry->s.pkt_nm.mtu;
@@ -619,7 +667,9 @@ static inline int netmap_pkt_to_odp(pktio_entry_t *pktio_entry,
 		buf = slot.buf + slot.data_offs;
 		len = slot.len;
 
+#ifndef MV_NETMAP_BUF_ZERO_COPY
 		odp_prefetch(buf);
+#endif /* !MV_NETMAP_BUF_ZERO_COPY */
 
 		if (odp_unlikely(len > pktio_entry->s.pkt_nm.max_frame_len)) {
 			ODP_ERR("RX: frame too big %" PRIu16 " %zu!\n", len,
@@ -641,12 +691,30 @@ static inline int netmap_pkt_to_odp(pktio_entry_t *pktio_entry,
 
 		pkt = pkt_tbl[i];
 		pkt_hdr = odp_packet_hdr(pkt);
-		pull_tail(pkt_hdr, alloc_len - len);
 
-		/* For now copy the data in the mbuf,
-		   worry about zero-copy later */
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+		headroom = odp_buffer_pool_headroom(pool);
+		if (odp_buffer_pool_tailroom(pool) || headroom > slot.data_offs) {
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+			pull_tail(pkt_hdr, alloc_len - len);
+
+		/* For now copy the data in the mbuf, worry about zero-copy later */
 		if (odp_packet_copy_from_mem(pkt, 0, len, buf) != 0)
 			goto fail;
+
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+			slot.ring->slot[slot.ring->head].buf_idx = slot.buf_idx;
+			slot.ring->head = nm_ring_next(slot.ring, slot.ring->head);
+		} else {
+			buf -= headroom;
+			packet_ext_buf_swap(pkt,
+					    buf,
+					    slot.ring->nr_buf_size,
+					    slot.ring, slot.buf_idx,
+					    slot.data_offs - headroom);
+			pull_tail(pkt_hdr, alloc_len - len);
+		}
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 
 		pkt_hdr->input = pktio_entry->s.handle;
 
@@ -692,16 +760,34 @@ static inline int netmap_recv_desc(pktio_entry_t *pktio_entry,
 
 		while (!nm_ring_empty(ring) && num_rx != num) {
 			slot_id = ring->cur;
+#ifdef BUF_ZERO_COPY_CHECKS
+		/* if buf-index is '0', we assume the buffer is invalid; skip it */
+		if (!ring->slot[slot_id].buf_idx) {
+			ODP_ERR("got invalid netmap buf (indx=0); skipping it!\n");
+			ring->cur = nm_ring_next(ring, slot_id);
+			continue;
+		}
+#endif /* BUF_ZERO_COPY_CHECKS */
 			buf = NETMAP_BUF(ring, ring->slot[slot_id].buf_idx);
 
 			slot_tbl[num_rx].buf = buf;
 			slot_tbl[num_rx].data_offs = ring->slot[slot_id].data_offs;
 			slot_tbl[num_rx].len = ring->slot[slot_id].len;
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+			slot_tbl[num_rx].buf_idx = ring->slot[slot_id].buf_idx;
+			ring->slot[slot_id].buf_idx = 0;
+			slot_tbl[num_rx].ring = ring;
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 			num_rx++;
 
 			ring->cur = nm_ring_next(ring, slot_id);
+#ifdef BUF_ZERO_COPY_CHECKS
+			total_rx[ring->ringid]++;
+#endif /* BUF_ZERO_COPY_CHECKS */
 		}
+#ifndef MV_NETMAP_BUF_ZERO_COPY
 		ring->head = ring->cur;
+#endif /* !MV_NETMAP_BUF_ZERO_COPY */
 		ring_id++;
 	}
 	desc->cur_rx_ring = ring_id;
@@ -757,7 +843,8 @@ static int netmap_recv(pktio_entry_t *pktio_entry, int index,
 		if (num_rx != num) {
 #ifdef BUSY_WAIT
 			polld.fd = desc->fd;
-			polld.events = polld.revents = 0;
+			polld.events = 0;
+			polld.revents = 0;
 			ioctl(polld.fd, NIOCRXSYNC, NULL);
 			if (polld.revents & POLLERR)
 				ODP_ERR("RX: sync error\n");
@@ -824,7 +911,11 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 			break;
 		}
 		for (i = 0; i < NM_INJECT_RETRIES; i++) {
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+			if (nm_ring_next(ring, ring->head) == ring->tail) {
+#else
 			if (nm_ring_empty(ring)) {
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 #ifdef BUSY_WAIT
 				ioctl(polld.fd, NIOCTXSYNC, NULL);
 #else
@@ -832,6 +923,54 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 #endif /* BUSY_WAIT */
 				continue;
 			}
+
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+			if (is_packet_buf_ext(pkt)) {
+				struct netmap_ring *rring;
+				uint32_t rbuf_idx;
+				uint16_t rdata_offs;
+				struct netmap_slot *rs, *ts;
+
+				/* Update the cur pointer to the tail and then update the slot_id */
+				ring->cur = ring->tail;
+				slot_id = ring->head;
+				/* odp_packet_print(pkt); */
+				packet_orig_buf_swap(pkt, &rring, &rbuf_idx, &rdata_offs);
+				/* printf("got slot %d bufIndx %d\n",rring->head, rbuf_idx); */
+
+				rs = &rring->slot[rring->head];
+				ts = &ring->slot[slot_id];
+				ts->len = pkt_len;
+#ifdef BUF_ZERO_COPY_CHECKS
+				if (rs->buf_idx)
+					ODP_ERR("bad buff indx in RX ring (%d)!\n", rs->buf_idx);
+				if (!ts->buf_idx)
+					ODP_ERR("bad buff indx in TX ring (%d)!\n", ts->buf_idx);
+#endif /* BUF_ZERO_COPY_CHECKS */
+
+				/* Swap Rx & Tx buffers */
+				rs->data_offs = ts->data_offs;
+				ts->data_offs = rdata_offs + odp_packet_headroom(pkt);
+				rs->buf_idx = ts->buf_idx;
+				ts->buf_idx = rbuf_idx;
+				/* report the buffer change. */
+				ts->flags |= NS_BUF_CHANGED;
+				rs->flags |= NS_BUF_CHANGED;
+#ifdef BUF_ZERO_COPY_CHECKS
+				total_tx[rring->ringid]++;
+				if (rring->head == rring->cur) {
+					printf("WARN: missmatch in buffers (head=curr %d)\n", rring->cur);
+					printf("\trx2=%llu, tx2=%llu, rx3=%llu, tx3=%llu!\n",
+					       (unsigned long long)total_rx[2],
+					       (unsigned long long)total_tx[2],
+					       (unsigned long long)total_rx[3],
+					       (unsigned long long)total_tx[3]);
+				} else
+#endif /* BUF_ZERO_COPY_CHECKS */
+				rring->head = nm_ring_next(rring, rring->head);
+				ring->head = nm_ring_next(ring, slot_id);
+		} else {
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 			slot_id = ring->cur;
 			ring->slot[slot_id].flags = 0;
 			ring->slot[slot_id].len = pkt_len;
@@ -845,6 +984,9 @@ static int netmap_send(pktio_entry_t *pktio_entry, int index,
 			}
 			ring->cur = nm_ring_next(ring, slot_id);
 			ring->head = ring->cur;
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+			}
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 			break;
 		}
 		if (i == NM_INJECT_RETRIES)

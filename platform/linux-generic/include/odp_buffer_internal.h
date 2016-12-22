@@ -33,6 +33,8 @@ extern "C" {
 #include <odp_schedule_if.h>
 #include <stddef.h>
 
+#define MV_NETMAP_BUF_ZERO_COPY
+
 #define ODP_BITSIZE(x) \
 	((x) <=     2 ?  1 : \
 	((x) <=     4 ?  2 : \
@@ -103,6 +105,17 @@ typedef union odp_buffer_bits_t {
 	};
 } odp_buffer_bits_t;
 
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+struct odp_netmap_buf_info {
+	void			*orig_buf;
+	uint32_t		 orig_size;
+	uint16_t		 orig_num_segs;
+	uint16_t		 data_offs;
+	struct netmap_ring	*ring;
+	uint32_t		 buf_idx;	/* buffer index */
+};
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+
 #define BUFFER_BURST_SIZE    CONFIG_BURST_SIZE
 
 /* Common buffer header */
@@ -125,6 +138,9 @@ struct odp_buffer_hdr_t {
 			uint32_t sustain:1;  /* Sustain order */
 		};
 	} flags;
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+	struct odp_netmap_buf_info	netmap_buf_inf;
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 	int16_t                  allocator;  /* allocating thread id */
 	int8_t                   type;       /* buffer type */
 	odp_event_type_t         event_type; /* for reuse as event */
