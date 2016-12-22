@@ -3,6 +3,7 @@ SUBDIRS = classifier \
 	  hello \
 	  ipsec \
 	  l2fwd_simple \
+	  bridge \
 	  l3fwd \
 	  packet \
 	  switch \
