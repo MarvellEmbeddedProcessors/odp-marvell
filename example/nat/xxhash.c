@@ -364,7 +364,7 @@ XXH_PUBLIC_API XXH32_state_t *XXH32_createState(void)
 }
 XXH_PUBLIC_API XXH_errorcode XXH32_freeState(XXH32_state_t *statePtr)
 {
-	XXH_free(void *p)(statePtr);
+    XXH_free(statePtr);
 	return XXH_OK;
 }
 
