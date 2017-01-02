@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2016, Marvell International Ltd.
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
