@@ -17,6 +17,8 @@ static inline void odp_cpu_pause(void)
 {
 }
 
+#define __arch_prefetch(_p)	__asm__ volatile("prfm pldl1keep, %a0\n" : : "p" (_p))
+
 #ifdef __cplusplus
 }
 #endif
