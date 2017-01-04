@@ -138,6 +138,11 @@ then
     m4_include([./platform/linux-generic/m4/configure.m4])
     m4_include([./test/linux-generic/m4/configure.m4])
     IMPLEMENTATION_NAME="odp-linux"
+elif test "${with_platform}" == "linux-musdk";
+then
+    m4_include([./platform/linux-musdk/m4/configure.m4])
+    m4_include([./test/linux-musdk/m4/configure.m4])
+    IMPLEMENTATION_NAME="odp-musdk"
 else
     echo "UNSUPPORTED PLATFORM: ${with_platform}"
     exit 1
