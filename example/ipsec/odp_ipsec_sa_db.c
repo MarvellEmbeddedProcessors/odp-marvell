@@ -104,6 +104,10 @@ int create_sa_db_entry(char *input, odp_bool_t cipher)
 						ODP_CIPHER_ALG_3DES_CBC;
 					entry->block_len  = 8;
 					entry->iv_len	  = 8;
+				} else if (0 == strcmp(token, "aes")) {
+					entry->alg.u.cipher = ODP_CIPHER_ALG_AES128_CBC;
+					entry->block_len  = 16;
+					entry->iv_len     = 16;
 				} else {
 					entry->alg.u.cipher =
 						ODP_CIPHER_ALG_NULL;
