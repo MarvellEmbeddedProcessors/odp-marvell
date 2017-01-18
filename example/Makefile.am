@@ -7,6 +7,7 @@ SUBDIRS = classifier \
 	  l3fwd \
 	  nat \
 	  packet \
+	  slow_path \
 	  switch \
 	  time \
 	  timer \
