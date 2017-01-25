@@ -22,7 +22,9 @@
 
 #include "odp_l3fwd_db.h"
 #include "odp_l3fwd_lpm.h"
+#include "ezxml.h"
 
+/*
 #define POOL_NUM_PKT	8192
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	64
@@ -32,9 +34,21 @@
 #define MAX_NB_QUEUE	32
 #define MAX_NB_QCONFS	1024
 #define MAX_NB_ROUTE	32
+*/
+#define POOL_NUM_PKT	1024
+#define POOL_SEG_LEN	1856
+#define MAX_PKT_BURST	64
+
+#define MAX_NB_WORKER	4
+#define MAX_NB_PKTIO	4
+#define MAX_NB_QUEUE	32
+#define MAX_NB_QCONFS	1024
+#define MAX_NB_ROUTE	32
+
 
 #define INVALID_ID	(-1)
 #define PRINT_INTERVAL	1	/* interval seconds of printing stats */
+#define PREFETCH_SHIFT 3
 
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
@@ -95,6 +109,11 @@ struct {
 	int (*fwd_func)(odp_packet_t pkt, int sif);
 } global;
 
+typedef struct {
+	char if_name[OIF_LEN];
+	odph_ethaddr_t nexthop_mac_addr;
+} if_mac_t;
+
 /** Global barrier to synchronize main and workers */
 static odp_barrier_t barrier;
 static int exit_threads;	/**< Break workers loop if set to 1 */
@@ -150,9 +169,12 @@ static void setup_fwd_db(void)
 
 	for (entry = fwd_db->list; NULL != entry; entry = entry->next) {
 		if_idx = entry->oif_id;
+#ifdef _DST_IP_FRWD_
+		/*LPM mode*/
 		if (!args->hash_mode)
 			fib_tbl_insert(entry->subnet.addr, if_idx,
 				       entry->subnet.depth);
+#endif
 		if (args->dest_mac_changed[if_idx])
 			global.eth_dest_mac[if_idx] = entry->dst_mac;
 		else
@@ -187,33 +209,43 @@ static inline int l3fwd_pkt_hash(odp_packet_t pkt, int sif)
 
 	ip = odp_packet_l3_ptr(pkt, NULL);
 	key.dst_ip = odp_be_to_cpu_32(ip->dst_addr);
+#ifndef _DST_IP_FRWD_
 	key.src_ip = odp_be_to_cpu_32(ip->src_addr);
 	key.proto = ip->proto;
+	key.pad1 = 0;
+	key.pad2 = 0;
+#endif
 
-	if (odp_packet_has_udp(pkt) ||
-	    odp_packet_has_tcp(pkt)) {
+	if (odp_likely((ip->proto == ODPH_IPPROTO_UDP) ||
+	    (ip->proto == ODPH_IPPROTO_TCP))) {
 		/* UDP or TCP*/
-		void *ptr = odp_packet_l4_ptr(pkt, NULL);
-
-		udp = (odph_udphdr_t *)ptr;
+		udp = (odph_udphdr_t *)odp_packet_l4_ptr(pkt, NULL);
 		key.src_port = odp_be_to_cpu_16(udp->src_port);
 		key.dst_port = odp_be_to_cpu_16(udp->dst_port);
 	} else {
-		key.src_port = 0;
-		key.dst_port = 0;
+		/* drop not TCP/UDP traffic */
+		odp_packet_free(pkt);
+		return INVALID_ID;
 	}
 	entry = find_fwd_db_entry(&key);
+	/*
 	ipv4_dec_ttl_csum_update(ip);
 	eth = odp_packet_l2_ptr(pkt, NULL);
-	if (entry) {
+	*/
+	if (odp_likely(entry != NULL)) {
+		eth = odp_packet_l2_ptr(pkt, NULL);
 		eth->src = entry->src_mac;
 		eth->dst = entry->dst_mac;
 		dif = entry->oif_id;
 	} else {
-		/* no route, send by src port */
-		eth->dst = eth->src;
-		dif = sif;
+		dif = sif; /* TBD remove sif and remove this line */
+
+		/* no route, drop */
+		odp_packet_free(pkt);
+		return INVALID_ID;
 	}
+
+	ipv4_dec_ttl_csum_update(ip);
 
 	return dif;
 }
@@ -337,20 +369,32 @@ static int run_worker(void *arg)
 		if (odp_unlikely(pkts < 1))
 			continue;
 
+		/* find dest interface for the first packet in the queue */
 		dif = global.fwd_func(pkt_tbl[0], if_idx);
 		tbl = &pkt_tbl[0];
-		while (pkts) {
+		while (pkts > 0) {
+			/* advance until the packets are forwarded to the same if and
+			   send them at once */
 			dst_port = dif;
 			for (i = 1; i < pkts; i++) {
+				if (pkts-i > PREFETCH_SHIFT)
+					odp_packet_prefetch(tbl[i+PREFETCH_SHIFT], 0, 64);
 				dif = global.fwd_func(tbl[i], if_idx);
-				if (dif != dst_port)
+				if (odp_unlikely(dif != dst_port))
 					break;
 			}
-			sent = odp_pktout_send(output_queues[dst_port], tbl, i);
-			if (odp_unlikely(sent < i)) {
-				sent = sent < 0 ? 0 : sent;
-				odp_packet_free_multi(&tbl[sent], i - sent);
-				thr_arg->tx_drops += i - sent;
+
+			/* FWD rule dropped the packets, update counters */
+			if (odp_unlikely(dst_port == INVALID_ID)) {
+				thr_arg->rx_drops += i;
+			}
+			else {
+				sent = odp_pktout_send(output_queues[dst_port], tbl, i);
+				if (odp_unlikely(sent < i)) {
+					sent = sent < 0 ? 0 : sent;
+					odp_packet_free_multi(&tbl[sent], i - sent);
+					thr_arg->tx_drops += i - sent;
+				}
 			}
 
 			if (i < pkts)
@@ -468,6 +512,7 @@ static int parse_config(char *cfg_str, app_args_t *args)
 
 static void print_usage(char *progname)
 {
+#ifdef _DST_IP_FRWD_
 	printf("\n"
 	       "ODP L3 forwarding application.\n"
 	       "\n"
@@ -496,6 +541,34 @@ static void print_usage(char *progname)
 	       "  -h, --help   Display help and exit.\n\n"
 	       "\n", NO_PATH(progname), NO_PATH(progname)
 	    );
+#else
+	printf("\n"
+	       "ODP L3 forwarding application.\n"
+	       "\n"
+	       "Usage: %s OPTIONS\n"
+	       "  E.g. %s -i eth0,eth1 -r 1.1.1.0/24,2.2.2.0/24,2002,2003,0,eth1\n"
+	       " In the above example,\n"
+	       " eth0 will send pkts to eth1\n"
+	       "\n"
+	       "Mandatory OPTIONS:\n"
+	       "  -i, --interface eth interfaces (comma-separated, no spaces)\n"
+	       "  -r, --route Src_SubNet,Dst_SubNet,Src_Port,Dst_Port,0-UDP/1-TCP,Dst_Intf[,NextHopMAC]\n"
+	       "	NextHopMAC can be optional\n"
+	       "\n"
+	       "Optional OPTIONS:\n"
+	       "  -d, --duration Seconds to run and print stats\n"
+	       "	optional, default as 0, run forever\n"
+	       "  -t, --thread Number of threads to do forwarding\n"
+	       "	optional, default as availbe worker cpu count\n"
+	       "  -q, --queue  Configure rx queue(s) for port\n"
+	       "	optional, format: [(port, queue, thread),...]\n"
+	       "	for example: -q '(0, 0, 1),(1,0,2)'\n"
+	       "  -e, --error_check 0: Don't check packet errors (default)\n"
+	       "                    1: Check packet errors\n"
+	       "  -h, --help   Display help and exit.\n\n"
+	       "\n", NO_PATH(progname), NO_PATH(progname)
+	    );
+#endif
 }
 
 static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
@@ -509,28 +582,34 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 	static struct option longopts[] = {
 		{"interface", required_argument, NULL, 'i'},	/* return 'i' */
 		{"route", required_argument, NULL, 'r'},	/* return 'r' */
-		{"style", required_argument, NULL, 's'},	/* return 's' */
-		{"duration", required_argument, NULL, 'd'},	/* return 'd' */
-		{"thread", required_argument, NULL, 't'},	/* return 't' */
-		{"queue", required_argument, NULL, 'q'},	/* return 'q' */
-		{"error_check", required_argument, NULL, 'e'},
+		{"style", optional_argument, NULL, 's'},	/* return 's' */
+		{"duration", optional_argument, NULL, 'd'},	/* return 'd' */
+		{"thread", optional_argument, NULL, 't'},	/* return 't' */
+		{"queue", optional_argument, NULL, 'q'},	/* return 'q' */
+		{"error_check", optional_argument, NULL, 'e'},
 		{"help", no_argument, NULL, 'h'},		/* return 'h' */
 		{NULL, 0, NULL, 0}
 	};
 
 	while (1) {
+#ifdef _DST_IP_FRWD_
 		opt = getopt_long(argc, argv, "+s:t:d:i:r:q:e:h",
 				  longopts, &long_index);
-
+#else
+		opt = getopt_long(argc, argv, "+t:d:i:r:q:e:h",
+				  longopts, &long_index);
+#endif
 		if (opt == -1)
 			break;	/* No more options */
 
 		switch (opt) {
+#ifdef _DST_IP_FRWD_
 		/* parse ip lookup method */
 		case 's':
 			if (!strcmp(optarg, "hash"))
 				args->hash_mode = 1;
 			break;
+#endif
 		/* parse number of worker threads to be run*/
 		case 't':
 			i = odp_cpu_count();
@@ -622,6 +701,10 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		}
 	}
 
+#ifndef _DST_IP_FRWD_
+	args->hash_mode = 1;
+#endif
+
 	/* checking arguments */
 	if (args->if_count == 0) {
 		printf("\nNo option -i specified.\n");
@@ -678,6 +761,125 @@ static void print_info(char *progname, app_args_t *args)
 	printf("\n\n");
 	fflush(NULL);
 }
+
+static void init_mac_table(if_mac_t *if_mac_table, app_args_t *args) {
+	ezxml_t nhop;
+	int i, j;
+
+	ezxml_t mac_xml = ezxml_parse_file("IfToMac.xml");
+	if (mac_xml == NULL) {
+		printf("ifToMac.xml was not found or can't be parsed\n");
+		return;
+	}
+
+	i = 0;
+	for (nhop = ezxml_child(mac_xml, "Nexthop"); nhop && (++i < MAX_NB_PKTIO); nhop = nhop->next) {
+		if (ezxml_child(nhop, "If") && ezxml_child(nhop, "Mac")) {
+			strcpy(if_mac_table[i].if_name, ezxml_child(nhop, "If")->txt);
+			if (odph_eth_addr_parse(&if_mac_table[i].nexthop_mac_addr, ezxml_child(nhop, "Mac")->txt) != 0) {
+				printf("init_mac_table: invalid nexthop MAC address\n");
+				exit(EXIT_FAILURE);
+			}
+		}
+	}
+	ezxml_free(mac_xml);
+
+	for (i = 0; i < MAX_NB_PKTIO; i++) {
+		for (j = 0; j < MAX_NB_PKTIO; j++) {
+			if (args->if_names[i]) {
+				if (strcmp(args->if_names[i], if_mac_table[j].if_name) == 0) {
+					memcpy(global.eth_dest_mac[i].addr, if_mac_table[j].nexthop_mac_addr.addr, ODPH_ETHADDR_LEN);
+					break;
+				}
+			}
+		}
+	}
+}
+
+#ifndef _DST_IP_FRWD_
+static void parse_routing_xml(app_args_t *args) {
+	ezxml_t rentry;
+	ezxml_t tuple;
+	int outif;
+	fwd_db_entry_t *entry;
+	int i = 0;
+
+	ezxml_t route_xml = ezxml_parse_file("L3Routing.xml");
+	if (route_xml == NULL) {
+		printf("L3Routing.xml was not found or can't be parsed\n");
+		return;
+	}
+	printf("Parsing routing xml\n");
+
+	for (rentry = ezxml_child(route_xml, "RouteEntry"); rentry; rentry = rentry->next) {
+		if (ezxml_child(rentry, "Tuple") && ezxml_child(rentry, "OutIf")) {
+			tuple = ezxml_child(rentry, "Tuple");
+			if (!(ezxml_child(tuple, "SrcIP") && ezxml_child(tuple, "DstIP") && ezxml_child(tuple, "SrcPort") &&
+				ezxml_child(tuple, "DstPort") && ezxml_child(tuple, "Protocol"))) {
+					printf("parse_routing_xml: invalid 5-Tuple\n");
+					exit(EXIT_FAILURE);
+			}
+
+			if (MAX_DB <= fwd_db->index) {
+				printf("parse_routing_xml: out of space\n");
+				return;
+			}
+
+			entry = &fwd_db->array[fwd_db->index];
+			if (entry == NULL) {
+				printf("parse_routing_xml: not initialized entry\n");
+				exit(EXIT_FAILURE);
+			}
+			if (parse_ipv4_string(ezxml_child(tuple, "SrcIP")->txt,
+					&entry->src_subnet.addr, &entry->src_subnet.depth) == -1) {
+				printf("Skipping xml entry: invalid SrcIp\n");
+				memset(entry, 0, sizeof(fwd_db_entry_t));
+				continue;
+			}
+			if (parse_ipv4_string(ezxml_child(tuple, "DstIP")->txt,
+					&entry->dst_subnet.addr, &entry->dst_subnet.depth) == -1) {
+				printf("Skipping xml entry: invalid DstIp\n");
+				memset(entry, 0, sizeof(fwd_db_entry_t));
+				continue;
+			}
+
+			entry->src_port = atoi(ezxml_child(tuple, "SrcPort")->txt);
+			entry->dst_port = atoi(ezxml_child(tuple, "DstPort")->txt);
+
+			if (strcmp(ezxml_child(tuple, "Protocol")->txt, "UDP") == 0) {
+				entry->protocol = ODPH_IPPROTO_UDP;
+			}
+			else {
+				if (strcmp(ezxml_child(tuple, "Protocol")->txt, "TCP") == 0) {
+					entry->protocol = ODPH_IPPROTO_TCP;
+				}
+				else {
+					printf("Skipping xml entry: Invalid protocol %s\n", ezxml_child(tuple, "Protocol")->txt);
+					memset(entry, 0, sizeof(fwd_db_entry_t));
+					continue;
+				}
+			}
+
+			strncpy(entry->oif, ezxml_child(rentry, "OutIf")->txt, OIF_LEN - 1);
+			entry->oif[OIF_LEN - 1] = 0;
+			outif = find_port_id_by_name(entry->oif, args);
+			if (outif == -1) {
+				printf("Skipping xml entry: port %s is not used.\n", entry->oif);
+				memset(entry, 0, sizeof(fwd_db_entry_t));
+				continue;
+			}
+
+			//Add route to the list
+			fwd_db->index++;
+			entry->next = fwd_db->list;
+			fwd_db->list = entry;
+			++i;
+		}
+	}
+	ezxml_free(route_xml);
+	printf("Routing xml: found %d entries\n", i);
+}
+#endif
 
 /**
  * Setup rx and tx queues, distribute them among threads.
@@ -849,12 +1051,13 @@ static void print_qconf_table(app_args_t *args)
 {
 	int i, j, k, qid, if_idx;
 	char buf[32];
+	char buf2[32];
 	struct thread_arg_s *thr_arg;
 
 	printf("Rx Queue table\n"
 	       "-----------------\n"
-	       "%-32s%-16s%-16s\n",
-	       "port/id", "rxq", "thread");
+	       "%-32s%-16s%-16s%-32s\n",
+	       "port/id", "rxq", "thread", "eth_dest_mac");
 
 	for (i = 0; i < args->worker_count; i++) {
 		thr_arg = &global.worker_args[i];
@@ -871,6 +1074,15 @@ static void print_qconf_table(app_args_t *args)
 					printf("%-32s%-16d%-16d\n", buf, qid,
 					       thr_arg->thr_idx);
 			}
+
+			sprintf(buf2, "%02x:%02x:%02x:%02x:%02x:%02x",
+				global.eth_dest_mac[j].addr[0],
+				global.eth_dest_mac[j].addr[1],
+				global.eth_dest_mac[j].addr[2],
+				global.eth_dest_mac[j].addr[3],
+				global.eth_dest_mac[j].addr[4],
+				global.eth_dest_mac[j].addr[5]);
+			printf("%-32s\n", buf2);
 		}
 	}
 	printf("\n");
@@ -951,6 +1163,7 @@ int main(int argc, char **argv)
 	app_args_t *args;
 	struct thread_arg_s *thr_arg;
 	char *oif;
+	if_mac_t if_mac_table[MAX_NB_PKTIO];
 
 	if (odp_init_global(&instance, NULL, NULL)) {
 		printf("Error: ODP global init failed.\n");
@@ -987,13 +1200,24 @@ int main(int argc, char **argv)
 	args = &global.cmd_args;
 	parse_cmdline_args(argc, argv, args);
 
+	//read MACs table file and configure interface MAC addresses
+	memset(if_mac_table, 0, sizeof(if_mac_t) * MAX_NB_PKTIO);
+	init_mac_table(if_mac_table, args);
+
 	/* Init l3fwd table */
 	init_fwd_db();
 
+#ifndef _DST_IP_FRWD_
+	parse_routing_xml(args);
+#endif
 	/* Add route into table */
 	for (i = 0; i < MAX_NB_ROUTE; i++) {
 		if (args->route_str[i]) {
-			create_fwd_db_entry(args->route_str[i], &oif, &dst_mac);
+			if (create_fwd_db_entry(args->route_str[i], &oif, &dst_mac) == -1) {
+				printf("Error: fail to create route entry.\n");
+				exit(1);
+			}
+
 			if (oif == NULL) {
 				printf("Error: fail to create route entry.\n");
 				exit(1);

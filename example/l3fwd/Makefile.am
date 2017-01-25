@@ -2,14 +2,16 @@ include $(top_srcdir)/example/Makefile.inc
 
 bin_PROGRAMS = odp_l3fwd$(EXEEXT)
 odp_l3fwd_LDFLAGS = $(AM_LDFLAGS) -static
-odp_l3fwd_CFLAGS = $(AM_CFLAGS) -I${top_srcdir}/example -I${top_srcdir}/test
+odp_l3fwd_CFLAGS = $(AM_CFLAGS) -I${top_srcdir}/example -I${top_srcdir}/test -D_BSD_SOURCE -std=c11
 
 noinst_HEADERS = \
 		  $(top_srcdir)/example/l3fwd/odp_l3fwd_db.h \
 		  $(top_srcdir)/example/l3fwd/odp_l3fwd_lpm.h \
-		  $(top_srcdir)/example/example_debug.h
+		  $(top_srcdir)/example/example_debug.h \
+		  $(top_srcdir)/example/l3fwd/xxhash.h \
+		  $(top_srcdir)/example/l3fwd/ezxml.h
 
-dist_odp_l3fwd_SOURCES = odp_l3fwd.c odp_l3fwd_db.c odp_l3fwd_lpm.c
+dist_odp_l3fwd_SOURCES = odp_l3fwd.c odp_l3fwd_db.c odp_l3fwd_lpm.c xxhash.c ezxml.c
 
 if test_example
 if HAVE_PCAP
