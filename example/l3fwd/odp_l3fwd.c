@@ -24,18 +24,8 @@
 #include "odp_l3fwd_lpm.h"
 #include "ezxml.h"
 
-/*
-#define POOL_NUM_PKT	8192
-#define POOL_SEG_LEN	1856
-#define MAX_PKT_BURST	64
 
-#define MAX_NB_WORKER	32
-#define MAX_NB_PKTIO	32
-#define MAX_NB_QUEUE	32
-#define MAX_NB_QCONFS	1024
-#define MAX_NB_ROUTE	32
-*/
-#define POOL_NUM_PKT	1024
+#define POOL_NUM_PKT	1024 /* 8192 */
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	64
 
@@ -45,14 +35,14 @@
 #define MAX_NB_QCONFS	1024
 #define MAX_NB_ROUTE	32
 
-
 #define INVALID_ID	(-1)
 #define PRINT_INTERVAL	1	/* interval seconds of printing stats */
-#define PREFETCH_SHIFT 3
+#define PREFETCH_SHIFT	3
 
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
 			    strrchr((file_name), '/') + 1 : (file_name))
+
 
 struct l3fwd_pktio_s {
 	odp_pktio_t pktio;

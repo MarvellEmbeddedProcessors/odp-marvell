@@ -14,6 +14,7 @@ extern "C" {
 #include <odp_api.h>
 #include <odp/helper/eth.h>
 
+#define _DST_IP_FRWD_
 #define OIF_LEN 32
 #define MAX_DB  65536
 #define MAX_STRING  32
