@@ -106,49 +106,29 @@ static inline int thread_rsv_id(void)
 	return 0;
 }
 
-/* TODO: find a better way to map the ports!!! */
 static int find_port_info(port_desc_t *port_desc)
 {
-/* TODO: temporary map table! */
-#if (MAX_NUM_PACKPROCS == 1)
-#define DEV2PORTS_MAP	\
-{			\
-	{"eth1", 0, 0},	\
-	{"eth2", 0, 1},	\
-	{"eth3", 0, 2},	\
-}
-#elif (MAX_NUM_PACKPROCS == 2)
-#define DEV2PORTS_MAP	\
-{			\
-	{"eth1", 0, 0},	\
-	{"eth2", 0, 1},	\
-	{"eth3", 0, 2},	\
-	{"eth4", 1, 0},	\
-	{"eth5", 1, 1},	\
-	{"eth6", 1, 2},	\
-}
-#else
-#error Illegal number of PPs!
-#endif /* (MAX_NUM_PACKPROCS	 == 1) */
-	port_desc_t	 ports_map[] = DEV2PORTS_MAP;
-	int		 i, num;
+	char		 name[20];
+	u8		 pp, ppio;
+	int		 err;
 
 	if (!port_desc->name) {
 		ODP_ERR("No port name given!\n");
 		return -1;
 	}
 
-	num = sizeof(ports_map) / sizeof(port_desc_t);
+	memset(name, 0, sizeof(name));
+	snprintf(name, sizeof(name), "%s", port_desc->name);
+	if ((err = pp2_netdev_get_port_info(name,
+					    &pp,
+					    &ppio)) != 0) {
+		ODP_ERR("PP2 Port %s not found!\n", port_desc->name);
+		return err;
+	}
 
-	for (i = 0; i < num; i++)
-		if (strcmp(port_desc->name, ports_map[i].name) == 0) {
-			port_desc->pp_id = ports_map[i].pp_id;
-			port_desc->ppio_id = ports_map[i].ppio_id;
-			break;
-		}
+	port_desc->ppio_id = ppio;
+	port_desc->pp_id = pp;
 
-	if (i == num)
-		return -1;
 	return 0;
 }
 
