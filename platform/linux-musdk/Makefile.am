@@ -10,6 +10,10 @@ AM_CFLAGS +=  -I$(srcdir)/include
 AM_CFLAGS +=  -I$(top_srcdir)/include
 AM_CFLAGS +=  -I$(top_builddir)/include
 AM_CFLAGS +=  -I$(linux_generic_srcdir)/include
+# The following lines are temporary W/A until MUSDK will expose its flags
+AM_CFLAGS +=	-DMVCONF_ARCH_DMA_ADDR_T_64BIT \
+		-DCONF_PP2_BPOOL_COOKIE_SIZE=32 \
+		-DCONF_PP2_BPOOL_DMA_ADDR_USE_32B
 
 include_HEADERS = \
 		  $(top_srcdir)/include/odp.h \
