@@ -32,6 +32,44 @@
 
 #define MAX_SESSIONS 32
 
+//#define CHECK_CYCLES
+#ifdef CHECK_CYCLES
+#include <sys/time.h>   // for gettimeofday()
+#define CLK_MHZ	1300
+static u64 usecs=0, cnt1=0, cnt2=0, cnt3=0, max_cnt=0;
+static struct timeval t0, t1, t2;
+
+#define START_COUNT_CYCLES	\
+	gettimeofday(&t1, NULL);
+#define STOP_N_REPORT_COUNT_CYCLES(_num,_max)	\
+do {						\
+	gettimeofday(&t2, NULL);		\
+	/* compute and print the elapsed time in millisec */	\
+	if (_num) {						\
+		usecs += (t2.tv_sec - t1.tv_sec) * 1000000.0;	\
+		usecs += (t2.tv_usec - t1.tv_usec);		\
+		cnt1+=_num;cnt2++;				\
+		if (_num>max_cnt) max_cnt = _num;		\
+	} else	cnt3++;						\
+	if (cnt1 >= _max) {					\
+		u64 tmp = (t2.tv_sec - t0.tv_sec) * 1000000.0;	\
+		tmp    += (t2.tv_usec - t0.tv_usec);		\
+		printf("Avg cycles: %d (est. perf: %dKpps)\n",	\
+			(int)(usecs*CLK_MHZ/cnt1),		\
+			(int)((cnt1*1000)/tmp));		\
+		printf("Avg burst: %.2f, %d calls for 0 pkts, "	\
+			"max was: %d\n", (float)cnt1/cnt2, 	\
+			(int)cnt3, (int)max_cnt);		\
+		usecs=cnt1=cnt2=cnt3=0;				\
+		gettimeofday(&t0, NULL);			\
+	}							\
+} while (0);
+
+#else
+#define START_COUNT_CYCLES
+#define STOP_N_REPORT_COUNT_CYCLES(_num,_max)
+#endif /* CHECK_CYCLES */
+
 
 typedef struct odp_crypto_global_s odp_crypto_global_t;
 
@@ -51,6 +89,12 @@ static odp_crypto_global_t *global;
 #ifdef ODP_PKTIO_MVSAM
 #define MAX_IV_SIZE		30
 #define PROCESS_PKT_BURST_SIZE	32
+
+#define REQ_THRSHLD_LO		(PROCESS_PKT_BURST_SIZE)
+#define REQ_THRSHLD_HI		((MVSAM_RING_SIZE<<1)-PROCESS_PKT_BURST_SIZE)
+#define IO_ENQ_THRSHLD_LO	(PROCESS_PKT_BURST_SIZE<<1)
+#define IO_ENQ_THRSHLD_HI	(MVSAM_RING_SIZE-(PROCESS_PKT_BURST_SIZE<<1))
+#define APP_Q_THRSHLD_HI	(REQ_THRSHLD_HI)
 
 struct crypto_session {
 
@@ -77,8 +121,8 @@ static unsigned int         io_enqs_cnt   = 0;
 static unsigned int         io_enqs_offs  = 0;
 static unsigned int         requests_cnt  = 0;
 static unsigned int         requests_offs = 0;
-static struct sam_cio_op_params sam_op_params[MVSAM_RING_SIZE<<1];
-static struct crypto_request requests[MVSAM_RING_SIZE<<1];
+static struct sam_cio_op_params	sam_op_params[MVSAM_RING_SIZE<<1];
+static struct crypto_request	requests[MVSAM_RING_SIZE<<1];
 #endif /* ODP_PKTIO_MVSAM */
 
 
@@ -194,28 +238,47 @@ static int mvsam_odp_crypto_session_destroy(odp_crypto_session_t session)
 	return -1;
 }
 
-static int mvsam_result_enq(odp_queue_t compl_queue, const odp_crypto_op_result_t * const result_p)
+static inline int mvsam_result_enq(struct sam_cio_op_result *sam_res, int num_res)
 {
-    odp_event_t completion_event;
-    odp_crypto_generic_op_result_t *op_result;
+	odp_event_t			 completion_events[MVSAM_RING_SIZE];
+	odp_crypto_generic_op_result_t	*op_result;
+	odp_queue_t			 compl_queue = NULL;
+	int				 i;
 
-    /* Linux generic will always use packet for completion event */
-    completion_event = odp_packet_to_event(result_p->pkt);
-    _odp_buffer_event_type_set(odp_buffer_from_event(completion_event),
-                               ODP_EVENT_CRYPTO_COMPL);
+	io_enqs_cnt -= num_res;
 
-    /* Asynchronous, build result (no HW so no errors) and send it*/
-    op_result = get_op_result_from_event(completion_event);
+	for (i=0; i<num_res; i++) {
+		struct crypto_request *result = (struct crypto_request *)sam_res[i].cookie;
+		compl_queue = result->session->compl_queue;
 
-    op_result->magic  = OP_RESULT_MAGIC;
-    op_result->result = *result_p;
+		completion_events[i] = odp_packet_to_event(result->result.pkt);
+		_odp_buffer_event_type_set(odp_buffer_from_event(completion_events[i]),
+					ODP_EVENT_CRYPTO_COMPL);
 
-    if (odp_queue_enq(compl_queue, completion_event)) {
-        odp_event_free(completion_event);
-        return -1;
-    }
-    else
-        return 0;
+		/* Asynchronous, build result (no HW so no errors) and send it*/
+		op_result = get_op_result_from_event(completion_events[i]);
+
+		op_result->magic  = OP_RESULT_MAGIC;
+		op_result->result.ctx = result->result.ctx;
+		op_result->result.pkt = result->result.pkt;
+		/* TODO: fill in correct result! */
+		op_result->result.ok                    = (sam_res[i].status == SAM_CIO_OK) ? 1 : 0;
+		if (odp_queue_enq(compl_queue, completion_events[i]) < 0) {
+			ODP_ERR("Failed to enQ to app Q!\n");
+			return -1;
+		}
+	}
+
+/*
+	if (odp_queue_enq_multi(compl_queue, completion_events, num_res) < 0) {
+		ODP_ERR("Failed to enQ to app Q!\n");
+		return -1;
+	}
+*/
+
+	app_enqs_cnt += num_res;
+
+	return 0;
 }
 
 static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
@@ -223,29 +286,93 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 				      odp_crypto_op_result_t *result)
 {
 	struct crypto_session	*session;
+	struct sam_cio_op_result sam_res_params[MVSAM_RING_SIZE];
 	u16			 num_reqs;
 	int			 rc = 0;
+	unsigned int		 tmp_offs;
 
 	NOTUSED(result);
 
-	if (app_enqs_cnt >= ((MVSAM_RING_SIZE<<1)-PROCESS_PKT_BURST_SIZE)) {
-		ODP_ERR("Too many requested are in app Q (%d)!\n", app_enqs_cnt);
+	if (app_enqs_cnt >= APP_Q_THRSHLD_HI) {
+		ODP_PRINT("App Q is full (%d)!\n", app_enqs_cnt);
+		*posted = 0;
+		result->ok = 0;
+		return -1;
+	}
+
+	if (requests_cnt >= REQ_THRSHLD_LO) {
+		/* If we reach to the end of the ring, we need to "drain" it a little */
+		if (io_enqs_cnt >= IO_ENQ_THRSHLD_LO) {
+			num_reqs = PROCESS_PKT_BURST_SIZE;
+			rc = sam_cio_deq(global->cio, sam_res_params, &num_reqs);
+			if(odp_unlikely(rc)) {
+				ODP_ERR("odp_musdk: failed to dequeue request\n");
+				/* TODO: drop all err pkts! */
+				return rc;
+			}
+			/* Enqueue to app Q */
+			rc = mvsam_result_enq(sam_res_params, num_reqs);
+			if (odp_unlikely(rc))
+				return rc;
+
+/*
+			if (io_enqs_cnt >= IO_ENQ_THRSHLD_HI) {
+				ODP_DBG("SAM ring is full (%d)!\n", io_enqs_cnt);
+				*posted = 0;
+				result->ok = 0;
+				return -1;
+			}
+*/
+		}
+
+		num_reqs = PROCESS_PKT_BURST_SIZE;
+		if ((io_enqs_offs > requests_offs) &&
+		    ((REQ_THRSHLD_HI - io_enqs_offs) < PROCESS_PKT_BURST_SIZE))
+			num_reqs = (REQ_THRSHLD_HI - io_enqs_offs);
+		else if ((io_enqs_offs <= requests_offs) &&
+		    ((requests_offs - io_enqs_offs) < PROCESS_PKT_BURST_SIZE))
+			num_reqs = (requests_offs - io_enqs_offs);
+		rc = sam_cio_enq(global->cio, &sam_op_params[io_enqs_offs], &num_reqs);
+		if(odp_unlikely(rc)) {
+			ODP_ERR("odp_musdk: failed to enqueue %d requests (%d)!\n",
+				requests_cnt, rc);
+			/* TODO: drop all err pkts! */
+			return rc;
+		}
+		requests_cnt -= num_reqs;
+		io_enqs_cnt += num_reqs;
+		io_enqs_offs += num_reqs;
+		if (io_enqs_offs == REQ_THRSHLD_HI)
+			io_enqs_offs = 0;
+	}
+
+	tmp_offs = requests_offs+1;
+	if (tmp_offs == REQ_THRSHLD_HI)
+		tmp_offs = 0;
+	if (tmp_offs == io_enqs_offs) {
+		ODP_DBG("Requests ring is full (%d)!\n", requests_cnt);
+		*posted = 0;
+		result->ok = 0;
 		return -1;
 	}
 
 	session  = (struct crypto_session *)params->session;
 
 	sam_op_params[requests_offs].cipher_len    = params->cipher_range.length;
-	sam_op_params[requests_offs].cipher_offset = params->cipher_range.offset;
+	sam_op_params[requests_offs].cipher_offset =
+		odp_packet_headroom(params->pkt) + params->cipher_range.offset;
 	sam_op_params[requests_offs].cookie        = &requests[requests_offs];
 	sam_op_params[requests_offs].sa            = session->sa;
 
-	requests[requests_offs].sam_src_buf.len   = odp_packet_len(params->pkt);
+	requests[requests_offs].sam_src_buf.len   =
+		odp_packet_headroom(params->pkt) + odp_packet_len(params->pkt);
 	requests[requests_offs].sam_src_buf.vaddr = odp_packet_data(params->pkt);
 	requests[requests_offs].sam_src_buf.paddr =
 		mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(params->pkt)));
 
-	requests[requests_offs].sam_dst_buf.len   = odp_packet_len(params->out_pkt);
+	/* TODO: need to get the real buffer size from the odp_buffer structure. */
+	requests[requests_offs].sam_dst_buf.len   =
+		odp_packet_headroom(params->pkt) + odp_packet_len(params->pkt) + 64;
 	requests[requests_offs].sam_dst_buf.vaddr = odp_packet_data(params->out_pkt);
 	requests[requests_offs].sam_dst_buf.paddr =
 		mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(params->out_pkt)));
@@ -266,83 +393,9 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 	requests[requests_offs].result.pkt = params->out_pkt;
 	requests[requests_offs].session = session;
 	requests_offs++;
-	if (requests_offs == ((MVSAM_RING_SIZE<<1)-PROCESS_PKT_BURST_SIZE))
+	if (requests_offs == REQ_THRSHLD_HI)
 		requests_offs = 0;
 	requests_cnt++;
-
-	if (requests_cnt >= PROCESS_PKT_BURST_SIZE) {
-		while (io_enqs_cnt >= (PROCESS_PKT_BURST_SIZE<<1)) {
-			struct sam_cio_op_result sam_res_params[MVSAM_RING_SIZE];
-			num_reqs = io_enqs_cnt;
-			rc = sam_cio_deq(global->cio, sam_res_params, &num_reqs);
-			if(odp_unlikely(rc)) {
-				ODP_ERR("odp_musdk: failed to dequeue request\n");
-				/* TODO: drop all err pkts! */
-				return rc;
-			}
-			io_enqs_cnt -= num_reqs;
-
-			for ( int i=0; i<num_reqs; i++ ) {
-				struct crypto_request *result = (struct crypto_request *)sam_res_params[i].cookie;
-				/* TODO: fill in correct result! */
-				result->result.cipher_status.alg_err = 0;
-				result->result.cipher_status.hw_err  = ODP_CRYPTO_HW_ERR_NONE;
-				result->result.auth_status.alg_err   = 0;
-				result->result.auth_status.hw_err    = ODP_CRYPTO_HW_ERR_NONE;
-				result->result.ok                    = ODP_CRYPTO_ALG_ERR_NONE;
-				/* ENQUEUE */
-				rc = mvsam_result_enq(result->session->compl_queue, &result->result);
-				if (odp_unlikely(rc)) {
-					ODP_ERR("odp_musdk: failed to mvsam_result_enq request\n");
-					return rc;
-				}
-			}
-			app_enqs_cnt += num_reqs;
-		}
-
-		num_reqs = requests_cnt;
-		rc = sam_cio_enq(global->cio, &sam_op_params[io_enqs_offs], &num_reqs);
-		if(odp_unlikely(rc)) {
-			ODP_ERR("odp_musdk: failed to enqueue %d requests (%d)!\n",
-				requests_cnt, rc);
-			/* TODO: drop all err pkts! */
-			return rc;
-		}
-		requests_cnt -= num_reqs;
-		io_enqs_cnt += num_reqs;
-		io_enqs_offs += num_reqs;
-		if (io_enqs_offs >= ((MVSAM_RING_SIZE<<1)-PROCESS_PKT_BURST_SIZE))
-			io_enqs_offs -= (MVSAM_RING_SIZE<<1)-PROCESS_PKT_BURST_SIZE;
-	}
-
-	if (io_enqs_cnt >= PROCESS_PKT_BURST_SIZE) {
-		struct sam_cio_op_result sam_res_params[MVSAM_RING_SIZE];
-		num_reqs = io_enqs_cnt;
-		rc = sam_cio_deq(global->cio, sam_res_params, &num_reqs);
-		if(odp_unlikely(rc)) {
-			ODP_ERR("odp_musdk: failed to dequeue request\n");
-			/* TODO: drop all err pkts! */
-			return rc;
-		}
-		io_enqs_cnt -= num_reqs;
-
-                for ( int i=0; i<num_reqs; i++ ) {
-			struct crypto_request *result = (struct crypto_request *)sam_res_params[i].cookie;
-			/* TODO: fill in correct result! */
-			result->result.cipher_status.alg_err = 0;
-			result->result.cipher_status.hw_err  = ODP_CRYPTO_HW_ERR_NONE;
-			result->result.auth_status.alg_err   = 0;
-			result->result.auth_status.hw_err    = ODP_CRYPTO_HW_ERR_NONE;
-			result->result.ok                    = ODP_CRYPTO_ALG_ERR_NONE;
-			/* ENQUEUE */
-			rc = mvsam_result_enq(result->session->compl_queue, &result->result);
-			if (odp_unlikely(rc)) {
-				ODP_ERR("odp_musdk: failed to mvsam_result_enq request\n");
-				return rc;
-			}
-		}
-		app_enqs_cnt += num_reqs;
-	}
 
 	/* Indicate to caller operation was async, */
 	/* no packet received from device          */
