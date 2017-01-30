@@ -752,16 +752,17 @@ static void print_info(char *progname, app_args_t *args)
 	fflush(NULL);
 }
 
+#ifndef _DST_IP_FRWD_
 static void init_mac_table(if_mac_t *if_mac_table, app_args_t *args) {
 	ezxml_t nhop;
 	int i, j;
 
 	ezxml_t mac_xml = ezxml_parse_file("IfToMac.xml");
 	if (mac_xml == NULL) {
-		printf("ifToMac.xml was not found or can't be parsed\n");
 		return;
 	}
 
+	printf("Parsing next hop table xml\n");
 	i = 0;
 	for (nhop = ezxml_child(mac_xml, "Nexthop"); nhop && (++i < MAX_NB_PKTIO); nhop = nhop->next) {
 		if (ezxml_child(nhop, "If") && ezxml_child(nhop, "Mac")) {
@@ -786,7 +787,6 @@ static void init_mac_table(if_mac_t *if_mac_table, app_args_t *args) {
 	}
 }
 
-#ifndef _DST_IP_FRWD_
 static void parse_routing_xml(app_args_t *args) {
 	ezxml_t rentry;
 	ezxml_t tuple;
@@ -796,7 +796,6 @@ static void parse_routing_xml(app_args_t *args) {
 
 	ezxml_t route_xml = ezxml_parse_file("L3Routing.xml");
 	if (route_xml == NULL) {
-		printf("L3Routing.xml was not found or can't be parsed\n");
 		return;
 	}
 	printf("Parsing routing xml\n");
@@ -1192,14 +1191,13 @@ int main(int argc, char **argv)
 
 	//read MACs table file and configure interface MAC addresses
 	memset(if_mac_table, 0, sizeof(if_mac_t) * MAX_NB_PKTIO);
-	init_mac_table(if_mac_table, args);
 
+#ifndef _DST_IP_FRWD_
+	init_mac_table(if_mac_table, args);
+#endif
 	/* Init l3fwd table */
 	init_fwd_db();
 
-#ifndef _DST_IP_FRWD_
-	parse_routing_xml(args);
-#endif
 	/* Add route into table */
 	for (i = 0; i < MAX_NB_ROUTE; i++) {
 		if (args->route_str[i]) {
@@ -1223,6 +1221,11 @@ int main(int argc, char **argv)
 				args->dest_mac_changed[j] = 1;
 		}
 	}
+
+#ifndef _DST_IP_FRWD_
+	/* routing xml entries are added to the fw db after command line configuration */
+	parse_routing_xml(args);
+#endif
 
 	print_info(NO_PATH(argv[0]), args);
 

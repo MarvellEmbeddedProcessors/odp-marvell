@@ -19,10 +19,6 @@ extern "C" {
 #define MAX_DB  65536
 #define MAX_STRING  32
 
-/*
-#define _DST_IP_FRWD_
-*/
-
 /**
  * Max number of flows
  */
