@@ -35,8 +35,6 @@
   *
   * $FreeBSD$
   */
-/*#define USE_JHASH_GOLDEN_RATIO*/
-
 #define JHASH_GOLDEN_RATIO	0x9e3779b9
 #define rot(x, k) (((x) << (k)) | ((x) >> (32 - (k))))
 #define FWD_BJ3_MIX(a, b, c) \
@@ -55,11 +53,13 @@
 static inline
 uint64_t l3fwd_calc_hash(ipv4_tuple5_t *key)
 {
-#ifdef USE_JHASH_GOLDEN_RATIO
+#ifdef _DST_IP_FRWD_
 	uint64_t l4_ports = 0;
-	uint32_t dst_ip = key->dst_ip + JHASH_GOLDEN_RATIO;;
+	uint32_t dst_ip, src_ip;
 
-	FWD_BJ3_MIX(key->src_ip, dst_ip, l4_ports);
+	src_ip = key->src_ip;
+	dst_ip = key->dst_ip + JHASH_GOLDEN_RATIO;
+	FWD_BJ3_MIX(src_ip, dst_ip, l4_ports);
 	return l4_ports;
 #else
 	return XXH_fast32((void*)key, sizeof(ipv4_tuple5_t), 0);
