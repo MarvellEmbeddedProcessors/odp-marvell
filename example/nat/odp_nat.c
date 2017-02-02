@@ -39,7 +39,7 @@
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
  */
-#define SHM_PKT_POOL_SIZE      8192
+#define SHM_PKT_POOL_SIZE      1024
 
 /** @def SHM_PKT_POOL_BUF_SIZE
  * @brief Buffer size of the packet pool buffer
@@ -49,13 +49,13 @@
 /** @def MAX_PKT_BURST
  * @brief Maximum number of packet in a burst
  */
-#define MAX_PKT_BURST          127
+#define MAX_PKT_BURST          64
 
 /** Maximum number of pktio queues per interface */
 #define MAX_QUEUES             32
 
 /** Maximum number of pktio interfaces */
-#define MAX_PKTIOS             8
+#define MAX_PKTIOS             4
 
 #define NAT_TBL_SIZE           (256 * 1024)
 #define NAT_TBL_DEPTH          4
