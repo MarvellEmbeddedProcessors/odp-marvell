@@ -606,7 +606,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	u16			 i, num, total_got, len;
 	enum pp2_inq_l3_type	 l3_type;
 	enum pp2_inq_l4_type	 l4_type;
-	u8			 l3_offset, l3_len;
+	u8			 l3_offset, l4_offset;
 	u8			 tc, qid, first_qid, num_qids;
 
 	total_got = 0;
@@ -628,9 +628,9 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		for (i = 0; i < num; i++, total_got++) {
 			pkt_table[total_got] = (odp_packet_t)((uintptr_t)pp2_ppio_inq_desc_get_cookie(&descs[i]) |
 						sys_dma_high_addr);
-			len = pp2_ppio_inq_desc_get_pkt_len(&descs[i]) - MVPP2_MH_SIZE;
+			len = pp2_ppio_inq_desc_get_pkt_len(&descs[i]);
 			pp2_ppio_inq_desc_get_l3_info(&descs[i], &l3_type, &l3_offset);
-			pp2_ppio_inq_desc_get_l4_info(&descs[i], &l4_type, &l3_len);
+			pp2_ppio_inq_desc_get_l4_info(&descs[i], &l4_type, &l4_offset);
 
 			pkt = pkt_table[total_got];
 			pkt_hdr = odp_packet_hdr(pkt);
@@ -638,15 +638,13 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			odp_packet_reset(pkt, len);
 			/* TODO: set appropriate headroom */
 			packet_parse_l2(&pkt_hdr->p, len);
-			l3_offset -= MVPP2_MH_SIZE;
 			odp_packet_l3_offset_set(pkt, l3_offset);
 			if (odp_likely(l3_type)) {
 				if (l3_type < PP2_INQ_L3_TYPE_IPV4_TTL_ZERO)
 					odp_packet_has_ipv4_set(pkt, 1);
 				else
 					odp_packet_has_ipv6_set(pkt, 1);
-				/* TODO: is this correct??? how do we calculate l4-offset??? */
-				odp_packet_l4_offset_set(pkt, ((l3_offset + l3_len) - 1));
+				odp_packet_l4_offset_set(pkt, l4_offset);
 				if (odp_likely(l4_type == PP2_INQ_L4_TYPE_UDP))
 					odp_packet_has_udp_set(pkt, 1);
 				else if (l4_type == PP2_INQ_L4_TYPE_TCP)
@@ -721,9 +719,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 								  l3_type,
 								  PP2_OUTQ_L4_TYPE_UDP,
 								  pkt_hdr->p.l3_offset,
-								  /* TODO: is this correct calc? what is that mean??? */
-								  ((pkt_hdr->p.l4_offset - pkt_hdr->p.l3_offset) -
-								  MVPP2_MH_SIZE + 1),
+								  pkt_hdr->p.l4_offset,
 								  1,
 								  1);
 			else if ((l3_type != PP2_OUTQ_L3_TYPE_OTHER) &&
@@ -733,9 +729,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 								  l3_type,
 								  PP2_OUTQ_L4_TYPE_TCP,
 								  pkt_hdr->p.l3_offset,
-								  /* TODO: is this correct calc? what is that mean??? */
-								  ((pkt_hdr->p.l4_offset - pkt_hdr->p.l3_offset) -
-								  MVPP2_MH_SIZE + 1),
+								  pkt_hdr->p.l4_offset,
 								  1,
 								  1);
 			else
@@ -743,7 +737,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 								  l3_type,
 								  PP2_OUTQ_L4_TYPE_OTHER,
 								  pkt_hdr->p.l3_offset,
-								  0,
+								  pkt_hdr->p.l4_offset,
 								  1,
 								  0);
 		}
