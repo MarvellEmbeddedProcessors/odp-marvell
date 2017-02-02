@@ -645,10 +645,10 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 				else
 					odp_packet_has_ipv6_set(pkt, 1);
 				odp_packet_l4_offset_set(pkt, l4_offset);
-				if (odp_likely(l4_type == PP2_INQ_L4_TYPE_UDP))
-					odp_packet_has_udp_set(pkt, 1);
-				else if (l4_type == PP2_INQ_L4_TYPE_TCP)
+				if (odp_likely(l4_type == PP2_INQ_L4_TYPE_TCP))
 					odp_packet_has_tcp_set(pkt, 1);
+				else if (odp_likely(l4_type == PP2_INQ_L4_TYPE_UDP))
+					odp_packet_has_udp_set(pkt, 1);
 			}
 			pkt_hdr->input = pktio_entry->s.handle;
 		}
@@ -711,35 +711,35 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		if (odp_likely(pkt_hdr->p.l3_offset != ODP_PACKET_OFFSET_INVALID)) {
 			enum pp2_outq_l3_type l3_type =
 				pkt_hdr->p.input_flags.ipv4 ? PP2_OUTQ_L3_TYPE_IPV4 :
-					pkt_hdr->p.input_flags.ipv6 ? PP2_OUTQ_L3_TYPE_IPV6 : PP2_OUTQ_L3_TYPE_OTHER;
+				pkt_hdr->p.input_flags.ipv6 ? PP2_OUTQ_L3_TYPE_IPV6 : PP2_OUTQ_L3_TYPE_OTHER;
+
 			if (odp_likely((l3_type != PP2_OUTQ_L3_TYPE_OTHER) &&
-				       (pkt_hdr->p.l4_offset != ODP_PACKET_OFFSET_INVALID) &&
-				       pkt_hdr->p.input_flags.udp))
-				pp2_ppio_outq_desc_set_proto_info(&descs[i],
-								  l3_type,
-								  PP2_OUTQ_L4_TYPE_UDP,
-								  pkt_hdr->p.l3_offset,
-								  pkt_hdr->p.l4_offset,
-								  1,
-								  1);
-			else if ((l3_type != PP2_OUTQ_L3_TYPE_OTHER) &&
-				 (pkt_hdr->p.l4_offset != ODP_PACKET_OFFSET_INVALID) &&
-				 pkt_hdr->p.input_flags.tcp)
-				pp2_ppio_outq_desc_set_proto_info(&descs[i],
-								  l3_type,
-								  PP2_OUTQ_L4_TYPE_TCP,
-								  pkt_hdr->p.l3_offset,
-								  pkt_hdr->p.l4_offset,
-								  1,
-								  1);
-			else
-				pp2_ppio_outq_desc_set_proto_info(&descs[i],
-								  l3_type,
-								  PP2_OUTQ_L4_TYPE_OTHER,
-								  pkt_hdr->p.l3_offset,
-								  pkt_hdr->p.l4_offset,
-								  1,
-								  0);
+				       (pkt_hdr->p.l4_offset != ODP_PACKET_OFFSET_INVALID))) {
+				if (odp_likely(pkt_hdr->p.input_flags.tcp))
+					pp2_ppio_outq_desc_set_proto_info(&descs[i],
+									  l3_type,
+									  PP2_OUTQ_L4_TYPE_TCP,
+									  pkt_hdr->p.l3_offset,
+									  pkt_hdr->p.l4_offset,
+									  1,
+									  1);
+				else if (odp_likely(pkt_hdr->p.input_flags.udp))
+					pp2_ppio_outq_desc_set_proto_info(&descs[i],
+									  l3_type,
+									  PP2_OUTQ_L4_TYPE_UDP,
+									  pkt_hdr->p.l3_offset,
+									  pkt_hdr->p.l4_offset,
+									  1,
+									  1);
+				else
+					pp2_ppio_outq_desc_set_proto_info(&descs[i],
+									  l3_type,
+									  PP2_OUTQ_L4_TYPE_OTHER,
+									  pkt_hdr->p.l3_offset,
+									  pkt_hdr->p.l4_offset,
+									  1,
+									  0);
+			}
 		}
 
 #ifdef USE_HW_BUFF_RECYLCE
