@@ -14,15 +14,14 @@ extern "C" {
 #include <odp_api.h>
 #include <odp/helper/eth.h>
 
-#define _DST_IP_FRWD_
 #define OIF_LEN 32
-#define MAX_DB  65536
+#define MAX_DB  32
 #define MAX_STRING  32
 
 /**
  * Max number of flows
  */
-#define FWD_MAX_FLOW_COUNT	(1 << 16)
+#define FWD_MAX_FLOW_COUNT	(1 << 22)
 
 /**
  * Default hash entries in a bucket
@@ -67,15 +66,7 @@ typedef struct fwd_db_entry_s {
 	int			oif_id;	      /**< Output interface idx */
 	odph_ethaddr_t		src_mac;      /**< Output source MAC */
 	odph_ethaddr_t		dst_mac;      /**< Output destination MAC */
-#ifndef _DST_IP_FRWD_
-	ip_addr_range_t		src_subnet;  /*subnet previously*/     /**< Subnet for this router */
-	ip_addr_range_t		dst_subnet;
-	uint16_t			src_port;
-	uint16_t			dst_port;
-	uint8_t				protocol;	/*0 - UDP, 1 - TCP */
-#else
-	ip_addr_range_t		subnet;
-#endif
+	ip_addr_range_t		subnet;       /**< Subnet for this router */
 } fwd_db_entry_t;
 
 /**
@@ -142,19 +133,6 @@ void dump_fwd_db(void);
  * @return pointer to forwarding DB entry else NULL
  */
 fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key);
-
-/**
- * Parse text string representing an IPv4 address or subnet
- *
- * String is of the format "XXX.XXX.XXX.XXX(/W)" where
- * "XXX" is decimal value and "/W" is optional subnet length
- *
- * @param ipaddress  Pointer to IP address/subnet string to convert
- * @param addr       Pointer to return IPv4 address, host endianness
- * @param depth      Pointer to subnet bit width
- * @return 0 if successful else -1
- */
-int parse_ipv4_string(char *ipaddress, uint32_t *addr, uint32_t *depth);
 
 #ifdef __cplusplus
 }

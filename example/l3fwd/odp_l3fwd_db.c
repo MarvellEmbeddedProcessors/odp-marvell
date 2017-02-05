@@ -14,8 +14,6 @@
 #include <example_debug.h>
 #include <odp_api.h>
 #include <odp_l3fwd_db.h>
-#include <odp/helper/ip.h>
-#include <xxhash.h>
 
 /** Jenkins hash support.
   *
@@ -53,17 +51,14 @@
 static inline
 uint64_t l3fwd_calc_hash(ipv4_tuple5_t *key)
 {
-#ifdef _DST_IP_FRWD_
 	uint64_t l4_ports = 0;
 	uint32_t dst_ip, src_ip;
 
 	src_ip = key->src_ip;
 	dst_ip = key->dst_ip + JHASH_GOLDEN_RATIO;
 	FWD_BJ3_MIX(src_ip, dst_ip, l4_ports);
+
 	return l4_ports;
-#else
-	return XXH_fast32((void*)key, sizeof(ipv4_tuple5_t), 0);
-#endif
 }
 
 /**
@@ -77,6 +72,7 @@ uint64_t l3fwd_calc_hash(ipv4_tuple5_t *key)
  * @param depth      Pointer to subnet bit width
  * @return 0 if successful else -1
  */
+static inline
 int parse_ipv4_string(char *ipaddress, uint32_t *addr, uint32_t *depth)
 {
 	int b[4];
@@ -306,11 +302,6 @@ void init_fwd_hash_cache(void)
 	uint64_t hash;
 	uint32_t i, nb_hosts;
 	ipv4_tuple5_t key;
-	int counter;
-	counter = 0;
-#ifndef _DST_IP_FRWD_
-	uint32_t j, dst_nb_hosts;
-#endif
 
 	create_fwd_hash_cache();
 
@@ -318,10 +309,7 @@ void init_fwd_hash_cache(void)
 	 * warm up the lookup cache with possible hosts.
 	 * with millions flows, save significant time during runtime.
 	 */
-
 	memset(&key, 0, sizeof(key));
-
-#ifdef _DST_IP_FRWD_
 	for (entry = fwd_db->list; NULL != entry; entry = entry->next) {
 		nb_hosts = 1 << (32 - entry->subnet.depth);
 		for (i = 0; i < nb_hosts; i++) {
@@ -336,47 +324,9 @@ void init_fwd_hash_cache(void)
 			flow = insert_fwd_cache(&key, bucket, entry);
 			if (!flow)
 				goto out;
-			counter++;
-
-			if (counter >= FWD_MAX_FLOW_COUNT) {
-				printf("Reached the maximum number of DB flows\n");
-				goto out;
-			}
 		}
 	}
-#else
-	for (entry = fwd_db->list; NULL != entry; entry = entry->next) {
-		nb_hosts = 1 << (32 - entry->src_subnet.depth);
-		dst_nb_hosts = 1 << (32 - entry->dst_subnet.depth);
-		for (i = 0; i < nb_hosts; i++) {
-			for (j = 0; j < dst_nb_hosts; j++) {
-				key.src_ip = entry->src_subnet.addr + i;
-				key.dst_ip = entry->dst_subnet.addr + j;
-				key.src_port = entry->src_port;
-				key.dst_port = entry->dst_port;
-				key.proto = entry->protocol;
-				hash = l3fwd_calc_hash(&key);
-				hash &= fwd_lookup_cache.bkt_cnt - 1;
-				bucket = &fwd_lookup_cache.bucket[hash];
-				flow = lookup_fwd_cache(&key, bucket);
-				if (flow)
-					return;
-
-				flow = insert_fwd_cache(&key, bucket, entry);
-				if (!flow)
-					goto out;
-				counter++;
-
-				if (counter >= FWD_MAX_FLOW_COUNT) {
-					printf("Reached the maximum number of DB flows\n");
-					goto out;
-				}
-			}
-		}
-	}
-#endif
 out:
-	printf("init_fwd_hash_cache created %d entries\n", counter);
 	return;
 }
 
@@ -414,17 +364,13 @@ int create_fwd_db_entry(char *input, char **oif, uint8_t **dst_mac)
 	*dst_mac = NULL;
 
 	/* Verify we haven't run out of space */
-	if (MAX_DB <= fwd_db->index) {
-		printf("create_fwd_db_entry: out of space\n");
+	if (MAX_DB <= fwd_db->index)
 		return -1;
-	}
 
 	/* Make a local copy */
 	local = malloc(strlen(input) + 1);
-	if (NULL == local) {
-		printf("create_fwd_db_entry: malloc failed\n");
+	if (NULL == local)
 		return -1;
-	}
 	strcpy(local, input);
 
 	/* Setup for using "strtok_r" to search input string */
@@ -437,13 +383,10 @@ int create_fwd_db_entry(char *input, char **oif, uint8_t **dst_mac)
 
 		/* Parse token based on its position */
 		switch (pos) {
-#ifdef _DST_IP_FRWD_
 		case 0:
-			if (parse_ipv4_string(token, &entry->subnet.addr,
-						&entry->subnet.depth) == -1) {
-				printf("create_fwd_db_entry: invalid IP address\n");
-				return -1;
-			}
+			parse_ipv4_string(token,
+					  &entry->subnet.addr,
+					  &entry->subnet.depth);
 			break;
 		case 1:
 			strncpy(entry->oif, token, OIF_LEN - 1);
@@ -451,58 +394,14 @@ int create_fwd_db_entry(char *input, char **oif, uint8_t **dst_mac)
 			*oif = entry->oif;
 			break;
 		case 2:
-			if (odph_eth_addr_parse(&entry->dst_mac, token) != 0) {
-				printf("create_fwd_db_entry: invalid Mac address\n");
-				return -1;
-			}
+			odph_eth_addr_parse(&entry->dst_mac, token);
 			*dst_mac = entry->dst_mac.addr;
 			break;
-#else
-		case 0:
-			if (parse_ipv4_string(token, &entry->src_subnet.addr,
-					  &entry->src_subnet.depth) == -1) {
-				printf("create_fwd_db_entry: invalid SrcIp\n");
-				return -1;
-			}
-			break;
-		case 1:
-			if (parse_ipv4_string(token, &entry->dst_subnet.addr,
-					  &entry->dst_subnet.depth) == -1) {
-				printf("create_fwd_db_entry: invalid DestIp\n");
-				return -1;
-			}
-			break;
-		case 2:
-			entry->src_port = atoi(token);
-			break;
-		case 3:
-			entry->dst_port = atoi(token);
-			break;
-		case 4:
-			entry->protocol = atoi(token);
-			if (entry->protocol > 1) {
-				printf("create_fwd_db_entry: Invalid protocol\n");
-				return -1;
-			}
-			entry->protocol = (entry->protocol == 0) ? ODPH_IPPROTO_UDP : ODPH_IPPROTO_TCP;
-			break;
-		case 5:
-			strncpy(entry->oif, token, OIF_LEN - 1);
-			entry->oif[OIF_LEN - 1] = 0;
-			*oif = entry->oif;
-			break;
-		case 6:
-			if (odph_eth_addr_parse(&entry->dst_mac, token) != 0) {
-				printf("create_fwd_db_entry: invalid Mac address\n");
-				return -1;
-			}
-			*dst_mac = entry->dst_mac.addr;
-			break;
-#endif
+
 		default:
 			printf("ERROR: extra token \"%s\" at position %d\n",
 			       token, pos);
-			return -1;
+			break;
 		}
 
 		/* Advance to next position */
@@ -536,39 +435,22 @@ void dump_fwd_db_entry(fwd_db_entry_t *entry)
 {
 	char subnet_str[MAX_STRING];
 	char mac_str[MAX_STRING];
-#ifndef _DST_IP_FRWD_
-	char dst_subnet_str[MAX_STRING];
-#endif
 
 	mac_addr_str(mac_str, &entry->dst_mac);
-#ifdef _DST_IP_FRWD_
 	printf("%-32s%-32s%-16s\n",
 	       ipv4_subnet_str(subnet_str, &entry->subnet),
 	       entry->oif, mac_str);
-#else
-	printf("%-32s%-32s%-16d%-16d%-8d%-32s%-16s\n",
-	       ipv4_subnet_str(subnet_str, &entry->src_subnet),
-	       ipv4_subnet_str(dst_subnet_str, &entry->dst_subnet),
-	       entry->src_port, entry->dst_port, entry->protocol,
-	       entry->oif, mac_str);
-#endif
 }
 
 void dump_fwd_db(void)
 {
 	fwd_db_entry_t *entry;
 
-#ifdef _DST_IP_FRWD_
 	printf("Routing table\n"
 	       "-----------------\n"
 	       "%-32s%-32s%-16s\n",
 	       "subnet", "next_hop", "dest_mac");
-#else
-	printf("Routing table\n"
-	       "-----------------\n"
-	       "%-32s%-32s%-16s%-16s%-8s%-32s%-16s\n",
-	       "src_subnet", "dst_subnet", "src_port", "dst_port", "proto", "next_hop", "dest_mac");
-#endif
+
 	for (entry = fwd_db->list; NULL != entry; entry = entry->next)
 		dump_fwd_db_entry(entry);
 
@@ -577,29 +459,25 @@ void dump_fwd_db(void)
 
 fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key)
 {
-#ifdef _DST_IP_FRWD_
 	fwd_db_entry_t *entry;
-#endif
 	flow_entry_t *flow;
 	flow_bucket_t *bucket;
 	uint64_t hash;
+	ipv4_tuple5_t newkey;
 
-#ifdef _DST_IP_FRWD_
-	int32_t dst_ip = key->dst_ip;
-	key->hi64 = 0;
-	key->lo64 = 0;
-	key->dst_ip = dst_ip;
-#endif
+	newkey.hi64 = 0;
+	newkey.lo64 = 0;
+	newkey.dst_ip = key->dst_ip;
+	key = &newkey;
 
 	/* first find in cache */
 	hash = l3fwd_calc_hash(key);
 	hash &= fwd_lookup_cache.bkt_cnt - 1;
 	bucket = &fwd_lookup_cache.bucket[hash];
 	flow = lookup_fwd_cache(key, bucket);
-	if (odp_likely(flow != NULL))
+	if (flow)
 		return flow->fwd_entry;
 
-#ifdef _DST_IP_FRWD_
 	for (entry = fwd_db->list; NULL != entry; entry = entry->next) {
 		uint32_t mask;
 
@@ -613,7 +491,4 @@ fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key)
 	insert_fwd_cache(key, bucket, entry);
 
 	return entry;
-#else
-	return NULL;
-#endif
 }
