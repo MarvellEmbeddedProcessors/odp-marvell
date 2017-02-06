@@ -604,9 +604,11 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	odp_packet_t		 pkt;
 	struct pp2_ppio_desc	 descs[CONFIG_BURST_SIZE];
 	u16			 i, num, total_got, len;
+#if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
 	enum pp2_inq_l3_type	 l3_type;
 	enum pp2_inq_l4_type	 l4_type;
 	u8			 l3_offset, l4_offset;
+#endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
 	u8			 tc, qid, first_qid, num_qids;
   	u32			 tmp_num_buffs = 0;
 
@@ -630,8 +632,10 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			pkt_table[total_got] = (odp_packet_t)((uintptr_t)pp2_ppio_inq_desc_get_cookie(&descs[i]) |
 						sys_dma_high_addr);
 			len = pp2_ppio_inq_desc_get_pkt_len(&descs[i]);
+#if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
 			pp2_ppio_inq_desc_get_l3_info(&descs[i], &l3_type, &l3_offset);
 			pp2_ppio_inq_desc_get_l4_info(&descs[i], &l4_type, &l4_offset);
+#endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
 
 			pkt = pkt_table[total_got];
 			pkt_hdr = odp_packet_hdr(pkt);
@@ -639,6 +643,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			odp_packet_reset(pkt, len);
 			/* TODO: set appropriate headroom */
 			packet_parse_l2(&pkt_hdr->p, len);
+
+#if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
 			odp_packet_l3_offset_set(pkt, l3_offset);
 			if (odp_likely(l3_type)) {
 				if (l3_type < PP2_INQ_L3_TYPE_IPV4_TTL_ZERO)
@@ -651,6 +657,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 				else if (odp_likely(l4_type == PP2_INQ_L4_TYPE_UDP))
 					odp_packet_has_udp_set(pkt, 1);
 			}
+#endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
 			pkt_hdr->input = pktio_entry->s.handle;
 		}
 	}
@@ -718,6 +725,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		pp2_ppio_outq_desc_set_pkt_offset(&descs[i], odp_packet_headroom(pkt));
 		pp2_ppio_outq_desc_set_pkt_len(&descs[i], len);
 
+#if defined(MVPP2_CSUM_OFF_SUPPORT) && (MVPP2_CSUM_OFF_SUPPORT == 1)
 		/* Update the slot for csum_offload */
 		if (odp_likely(pkt_hdr->p.l3_offset != ODP_PACKET_OFFSET_INVALID)) {
 			enum pp2_outq_l3_type l3_type =
@@ -752,6 +760,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 									  0);
 			}
 		}
+#endif /* defined(MVPP2_CSUM_OFF_SUPPORT) && ... */
 
 #ifdef USE_HW_BUFF_RECYLCE
 		pp2_ppio_outq_desc_set_cookie(&descs[i], lower_32_bits((u64)(uintptr_t)pkt));
