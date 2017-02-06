@@ -87,11 +87,6 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 		params.iv.data = entry->state.iv;
 		params.iv.length = cipher_sa->iv_len;
 		mode = cipher_sa->mode;
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
-        params.auth_alg = cipher_sa->alg.u.auth;
-        params.auth_key.data = cipher_sa->auth_key.data;
-        params.auth_key.length = cipher_sa->auth_key.length;
-#endif
 	} else {
 		params.cipher_alg = ODP_CIPHER_ALG_NULL;
 		params.iv.data = NULL;
@@ -104,12 +99,9 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 		params.auth_key.data = auth_sa->key.data;
 		params.auth_key.length = auth_sa->key.length;
 		mode = auth_sa->mode;
-	}
-#ifndef ODP_CRYPTO_HAS_HMAC_SUPPORT
-	else {
+	} else {
 		params.auth_alg = ODP_AUTH_ALG_NULL;
 	}
-#endif
 
 	/* Generate an IV */
 	if (params.iv.length) {

@@ -27,9 +27,6 @@ typedef struct sa_db_entry_s {
 	uint32_t              spi;       /**< Security Parameter Index */
 	ipsec_alg_t           alg;       /**< Cipher/auth algorithm */
 	ipsec_key_t           key;       /**< Cipher/auth key */
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
-	ipsec_key_t           auth_key;  /**< Auth key */
-#endif
 	uint32_t              block_len; /**< Cipher block length */
 	uint32_t              iv_len;    /**< Initialization Vector length */
 	uint32_t              icv_len;   /**< Integrity Check Value length */
