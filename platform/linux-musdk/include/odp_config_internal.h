@@ -30,6 +30,9 @@ extern "C" {
 #define MVPP2_MAX_NUM_BUFFS		4096
 #define MVPP2_DFLT_MTU			1500
 
+#define MVPP2_PKT_PARSE_SUPPORT	1
+#define MVPP2_CSUM_OFF_SUPPORT	1
+
 #define MVSAM_TOTAL_NUM_CIOS	4
 
 /* TODO: reserve some rings for the LK */
@@ -39,6 +42,9 @@ extern "C" {
 
 #define MUSDK_TOTAL_SHM_SIZE		(48 * 1024 * 1024)
 /* MUSDK - end */
+
+#define ODP_CONFIG_PKTIO_PKT_PARSE_SUPPORT	MVPP2_PKT_PARSE_SUPPORT
+#define ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT	MVPP2_CSUM_OFF_SUPPORT
 
 /*
  * Maximum number of pools
