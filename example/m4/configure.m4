@@ -18,6 +18,7 @@ AC_CONFIG_FILES([example/classifier/Makefile
 		 example/l2fwd_simple/Makefile
 		 example/bridge/Makefile
 		 example/l3fwd/Makefile
+		 example/l3fwd_mv/Makefile
 		 example/nat/Makefile
 		 example/packet/Makefile
 		 example/slow_path/Makefile
