@@ -16,11 +16,6 @@ extern "C" {
 #include <odp/helper/ip.h>
 #include <odp/helper/ipsec.h>
 
-#define ODP_CRYPTO_HAS_HMAC_SUPPORT
-#ifndef ODP_CRYPTO_MVSAM_SUPPORT
-#undef ODP_CRYPTO_HAS_HMAC_SUPPORT
-#endif /* !ODP_CRYPTO_MVSAM_SUPPORT */
-
 #ifndef TRUE
 #define TRUE  1
 #endif
@@ -33,9 +28,8 @@ extern "C" {
 #define MAX_STRING      32   /**< maximum string length */
 #define MAX_IV_LEN      32   /**< Maximum IV length in bytes */
 
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
 #define KEY_BITS_AES        128  /**< AES128 cipher key length in bits */
-#endif
+#define KEY_BITS_SHA1       160  /**< SHA1 auth key length in bits */
 #define KEY_BITS_3DES       192  /**< 3DES cipher key length in bits */
 #define KEY_BITS_MD5_96     128  /**< MD5_96 auth key length in bits */
 #define KEY_BITS_SHA256_128 256  /**< SHA256_128 auth key length in bits */
@@ -67,11 +61,7 @@ typedef struct {
  */
 typedef struct {
 	odp_bool_t cipher;
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
-    struct {
-#else
 	union {
-#endif
 		odp_cipher_alg_t cipher;
 		odp_auth_alg_t   auth;
 	} u;
@@ -107,15 +97,8 @@ int parse_key_string(char *keystring,
 
 	/* Algorithm is either cipher or authentication */
 	if (alg->cipher) {
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
-        if (((alg->u.cipher == ODP_CIPHER_ALG_3DES_CBC) ||
-            (alg->u.cipher == ODP_CIPHER_ALG_AES128_CBC)) &&
-            ((KEY_BITS_3DES == key_bits_in) ||
-             (KEY_BITS_AES == key_bits_in)))
-#else
-            if ((alg->u.cipher == ODP_CIPHER_ALG_3DES_CBC) &&
-                (KEY_BITS_3DES == key_bits_in))
-#endif
+		if (((alg->u.cipher == ODP_CIPHER_ALG_3DES_CBC) && (key_bits_in == KEY_BITS_3DES)) ||
+		    ((alg->u.cipher == ODP_CIPHER_ALG_AES128_CBC) && (key_bits_in == KEY_BITS_AES)))
 			key->length = key_bits_in / 8;
 	} else {
 		if ((alg->u.auth == ODP_AUTH_ALG_MD5_96) &&

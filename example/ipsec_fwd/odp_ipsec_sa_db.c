@@ -104,17 +104,11 @@ int create_sa_db_entry(char *input, odp_bool_t cipher)
 						ODP_CIPHER_ALG_3DES_CBC;
 					entry->block_len  = 8;
 					entry->iv_len	  = 8;
-				}
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
-				else if (0 == strcmp(token, "aes-cbc-hmac-md5")) {
+				} else if (0 == strcmp(token, "aes")) {
 					entry->alg.u.cipher = ODP_CIPHER_ALG_AES128_CBC;
 					entry->block_len  = 16;
 					entry->iv_len     = 16;
-					entry->alg.u.auth = ODP_AUTH_ALG_MD5_96;
-					entry->icv_len    = 12;
-				}
-#endif /* ODP_CRYPTO_HAS_HMAC_SUPPORT */
-				else {
+				} else {
 					entry->alg.u.cipher =
 						ODP_CIPHER_ALG_NULL;
 				}
@@ -140,15 +134,6 @@ int create_sa_db_entry(char *input, odp_bool_t cipher)
 					 &entry->key,
 					 &entry->alg);
 			break;
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
-		case 5:
-			entry->alg.cipher = FALSE;
-			parse_key_string(token,
-					 &entry->auth_key,
-					 &entry->alg);
-			entry->alg.cipher = TRUE;
-			break;
-#endif /* ODP_CRYPTO_HAS_HMAC_SUPPORT */
 		default:
 			printf("ERROR: extra token \"%s\" at position %d\n",
 			       token, pos);
@@ -160,11 +145,7 @@ int create_sa_db_entry(char *input, odp_bool_t cipher)
 	}
 
 	/* Verify we parsed exactly the number of tokens we expected */
-#ifdef ODP_CRYPTO_HAS_HMAC_SUPPORT
-	if (6 != pos) {
-#else
 	if (5 != pos) {
-#endif /* ODP_CRYPTO_HAS_HMAC_SUPPORT */
 		printf("ERROR: \"%s\" contains %d tokens, expected 5\n",
 		       input,
 		       pos);
