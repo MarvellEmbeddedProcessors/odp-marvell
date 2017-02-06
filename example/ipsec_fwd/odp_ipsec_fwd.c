@@ -50,6 +50,8 @@
 
 
 //#define IPSEC_DEBUG
+#define MEMMOVE_OPTIMIZED
+
 
 #ifdef IPSEC_DEBUG
 #define dprintf printf
@@ -61,14 +63,14 @@
 /**
  * Buffer pool for packet IO
  */
-#define SHM_PKT_POOL_BUF_COUNT 1024
+#define SHM_PKT_POOL_BUF_COUNT 512
 #define SHM_PKT_POOL_BUF_SIZE  2048
 #define SHM_PKT_POOL_SIZE      (SHM_PKT_POOL_BUF_COUNT * SHM_PKT_POOL_BUF_SIZE)
 
 /**
  * Buffer pool for crypto session output packets
  */
-#define SHM_OUT_POOL_BUF_COUNT 1024
+#define SHM_OUT_POOL_BUF_COUNT 512
 #define SHM_OUT_POOL_BUF_SIZE  2048
 #define SHM_OUT_POOL_SIZE      (SHM_OUT_POOL_BUF_COUNT * SHM_OUT_POOL_BUF_SIZE)
 
@@ -838,10 +840,17 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 #endif /* !CSUM_HW_OFF_SUPPORT */
 
 	/* Correct the packet length and move payload into position */
+#ifdef MEMMOVE_OPTIMIZED
+	uint8_t *l2_p = odp_packet_l2_ptr(pkt, NULL);
+	memmove(l2_p + hdr_len, l2_p, ipv4_data_p(ip) - l2_p);
+	odp_packet_pull_head(pkt, hdr_len);
+	odp_packet_pull_tail(pkt, trl_len);
+#else
 	memmove(ipv4_data_p(ip),
-		ipv4_data_p(ip) + hdr_len,
-		odp_be_to_cpu_16(ip->tot_len));
+	ipv4_data_p(ip) + hdr_len,
+	odp_be_to_cpu_16(ip->tot_len));
 	odp_packet_pull_tail(pkt, hdr_len + trl_len);
+#endif
 
 	/* Fall through to next state */
 	return PKT_CONTINUE;
@@ -918,8 +927,20 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 		hdr_len += sizeof(odph_esphdr_t);
 		hdr_len += entry->esp.iv_len;
 	}
+
+#ifdef MEMMOVE_OPTIMIZED
+	uint8_t *l2_p = odp_packet_l2_ptr(pkt, NULL);
+	uint16_t move_size = ip_data - l2_p;	/* use not updated l2_ptr  */
+	odp_packet_push_head(pkt, hdr_len);
+	memmove(l2_p - hdr_len, l2_p, move_size);
+	/* update local pointers */
+	ip = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
+	esp = (odph_esphdr_t *)ipv4_data_p(ip);
+	buf -= hdr_len;
+#else
 	memmove(ip_data + hdr_len, ip_data, ip_data_len);
 	ip_data += hdr_len;
+#endif
 
 	/* update outer header in tunnel mode */
 	if (entry->mode == IPSEC_SA_MODE_TUNNEL) {
@@ -977,7 +998,12 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 
 	/* Set IPv4 length before authentication */
 	ipv4_adjust_len(ip, hdr_len + trl_len);
+
+#ifdef MEMMOVE_OPTIMIZED
+	if (!odp_packet_push_tail(pkt, trl_len)) {
+#else
 	if (!odp_packet_push_tail(pkt, hdr_len + trl_len)) {
+#endif
 		dprintf("out_classify %s odp_packet_push_tail failed PKT_DROP\n", __func__ );
 		return PKT_DROP;
 		}
@@ -996,7 +1022,7 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 
 	*skip = FALSE;
 
-	dprintf("out_classify %s ok status PKT_POSTED, skip FALSE \n", __func__ );
+	dprintf("out_classify %s ok status PKT_POSTED, skip FALSE \n", __func__);
 
 	return PKT_POSTED;
 }
@@ -1031,6 +1057,7 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 
 		esp = (odph_esphdr_t *)(ctx->ipsec.esp_offset + buf);
 		esp->seq_no = odp_cpu_to_be_32((*ctx->ipsec.esp_seq)++);
+		/* TBD: ctx->ipsec.params.override_iv_ptr = esp->iv; */
 	}
 	if (ctx->ipsec.tun_hdr_offset) {
 		odph_ipv4hdr_t *ip;
@@ -1101,7 +1128,7 @@ int crypto_rx_handler(odp_pktout_queue_t *output_queues)
 	int i;
 	odp_event_t events[MAX_PKT_BURST];
 
-	pkt_disposition_e rc;
+	pkt_disposition_e rc = 0;
 	odp_crypto_op_result_t result;
 
 	int after_crypto_pkts;
@@ -1130,6 +1157,8 @@ int crypto_rx_handler(odp_pktout_queue_t *output_queues)
 		odp_crypto_compl_free(compl);			
 		after_crypto_pkt[i] = result.pkt;			
 		after_crypto_ctx[i] = result.ctx;
+
+		dprintf("AFTER CRYPTO after_crypto_pkts %d\n", after_crypto_pkts);
 
 		if (PKT_STATE_IPSEC_IN_FINISH == after_crypto_ctx[i]->state) {
 				dprintf("ODP Main Loop 6: Decryption odp_packet_from_event rc=%d state=%d  packet=%d\n", rc, after_crypto_ctx[i]->state, i);
@@ -1248,7 +1277,7 @@ if ((args->appl.if_count == 1) && (ctx->lb == 0)) {
 		dprintf("TX_send drops %d packets from total %d\n", i - start_tx_index - sent, i - start_tx_index);
 	}
 
-	// cleanup buffers
+	/* cleanup buffers */
 	for ( i = 0; i < after_crypto_pkts; i++ ) {
 		free_pkt_ctx(after_crypto_ctx[i]);
 	}
@@ -1319,8 +1348,11 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 		}
 
 		pkts = odp_pktin_recv(inq, pkt_tbl, MAX_PKT_BURST);
-		if (pkts < 1)
+		if (pkts < 1) {
 			continue;
+		}
+
+		dprintf("ODP Main Loop 0: odp_pktin_recv  pkts=%d\n", pkts);
 
 		for (i = 0; i < pkts; i++) {
 #ifdef USE_APP_PREFETCH
@@ -1380,6 +1412,7 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 				num_of_sent_to_crypto_packets++;
 			}
 		}
+
 
 		int after_crypto_pkts;
 
