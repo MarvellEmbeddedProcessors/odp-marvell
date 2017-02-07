@@ -48,6 +48,7 @@
 #include <odp_ipsec_cache.h>
 #include <odp_ipsec_stream.h>
 
+#define UNUSED			__attribute__((__unused__))
 
 //#define IPSEC_DEBUG
 #define MEMMOVE_OPTIMIZED
@@ -82,6 +83,7 @@
 
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	32
+#define MAX_CTX_DB      MAX_PKT_BURST*8    /* 256 */
 
 #define MAX_NB_PKTIO	2
 #define MAX_NB_QUEUE	2
@@ -100,7 +102,7 @@
 #ifdef CHECK_CYCLES
 #include <sys/time.h>   // for gettimeofday()
 #define CLK_MHZ	1300
-static int usecs1=0, cnt1=0;
+static signed int long long usecs1=0, cnt1=0;
 static struct timeval t1, t2;
 
 #define START_COUNT_CYCLES	\
@@ -115,7 +117,7 @@ do {						\
 		cnt1+=_num;		\
 	}				\
 	if (cnt1 >= _max) {		\
-		printf("Cycles count: %d\n",	\
+		printf("Cycles count: %lld\n",	\
 			usecs1*CLK_MHZ/cnt1);	\
 		usecs1=cnt1=0;		\
 	}				\
@@ -271,6 +273,28 @@ static inline void swap_l3(char *buf)
 #endif /* PKT_ECHO_SUPPORT */
 
 /**
+  Context Buffer Manager
+*/
+
+static int ctx_buf_mng_next_free_index;
+static odp_buffer_t ctx_buf_mng_db[MAX_CTX_DB];
+
+static void ctx_buf_mng_init(void) {
+
+	for (int i = 0; i < MAX_CTX_DB; i++) {
+		ctx_buf_mng_db[i] = odp_buffer_alloc(ctx_pool);
+
+		if (odp_unlikely(ODP_BUFFER_INVALID == ctx_buf_mng_db[i])) {
+			printf("Bad pointer %s i=%d\n", __func__, i);
+			abort();
+		}
+	}
+	ctx_buf_mng_next_free_index = 0;
+
+}
+
+
+/**
  * Allocate per packet processing context and associate it with
  * packet buffer
  *
@@ -281,11 +305,13 @@ static inline void swap_l3(char *buf)
 static
 pkt_ctx_t *alloc_pkt_ctx(odp_packet_t pkt)
 {
-	odp_buffer_t ctx_buf = odp_buffer_alloc(ctx_pool);
-	pkt_ctx_t *ctx;
+	odp_buffer_t ctx_buf = ctx_buf_mng_db[ctx_buf_mng_next_free_index];// odp_buffer_alloc(ctx_pool);
 
-	if (odp_unlikely(ODP_BUFFER_INVALID == ctx_buf))
-		return NULL;
+	if (++ctx_buf_mng_next_free_index >= MAX_CTX_DB-1 ) {
+		ctx_buf_mng_next_free_index = 0;
+	}
+
+	pkt_ctx_t *ctx;
 
 	ctx = odp_buffer_addr(ctx_buf);
 	memset(ctx, 0, sizeof(*ctx));
@@ -301,9 +327,11 @@ pkt_ctx_t *alloc_pkt_ctx(odp_packet_t pkt)
  * @param ctx  Packet context
  */
 static
-void free_pkt_ctx(pkt_ctx_t *ctx)
+void free_pkt_ctx(pkt_ctx_t *ctx UNUSED)
 {
-	odp_buffer_free(ctx->buffer);
+//	odp_buffer_free(ctx->buffer);
+
+
 }
 
 /**
@@ -753,7 +781,8 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 				 result)) {
 
 		dprintf("do_ipsec_in_classify 3   odp_crypto_operation failed\n");
-		abort();
+
+		return PKT_DROP;
 	}
 
 	dprintf("do_ipsec_in_classify 4 finish=%d *skip=%d \n", posted, *skip);
@@ -1079,7 +1108,7 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 	if (odp_crypto_operation(&ctx->ipsec.params,
 				 &posted,
 				 result)) {
-		abort();
+		return PKT_DROP;
 	}
 	return (posted) ? PKT_POSTED : PKT_CONTINUE;
 }
@@ -1121,27 +1150,31 @@ pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
 	return PKT_CONTINUE;
 }
 
+
+static odp_event_t after_crypto_events[MAX_PKT_BURST*2];
+static odp_packet_t after_crypto_pkt[MAX_PKT_BURST*2];
+static pkt_ctx_t	*after_crypto_ctx[MAX_PKT_BURST*2];
+
+
 static
 int crypto_rx_handler(odp_pktout_queue_t *output_queues)
 {
 	int dst_port;
 	int i;
-	odp_event_t events[MAX_PKT_BURST];
 
 	pkt_disposition_e rc = 0;
 	odp_crypto_op_result_t result;
 
 	int after_crypto_pkts;
-	odp_packet_t after_crypto_pkt[MAX_PKT_BURST];
-	pkt_ctx_t   *after_crypto_ctx[MAX_PKT_BURST];
 	int sent;
 
 	/* Encryption: src_port = 0;  dsp_port = 1; Decryption:  src_port = 1;	dsp_port = 0; - for demo only  */
 
 	/* FROM CRYPTO */
-	after_crypto_pkts = odp_queue_deq_multi(completionq, events, MAX_PKT_BURST);
-	if (after_crypto_pkts < 1)
+	after_crypto_pkts = odp_queue_deq_multi(completionq, after_crypto_events, MAX_PKT_BURST*2);
+	if (after_crypto_pkts < 1) {
 		return 0;
+	}
 
 #define IPSEC_ENCRYPT_DIRECTION 0
 #define IPSEC_DECRYPT_DIRECTION 1
@@ -1152,10 +1185,10 @@ int crypto_rx_handler(odp_pktout_queue_t *output_queues)
 	for (i = 0; i < after_crypto_pkts; i++) {
 		odp_crypto_compl_t compl;
 
-		compl = odp_crypto_compl_from_event(events[i]);			
-		odp_crypto_compl_result(compl, &result);			
-		odp_crypto_compl_free(compl);			
-		after_crypto_pkt[i] = result.pkt;			
+		compl = odp_crypto_compl_from_event(after_crypto_events[i]);
+		odp_crypto_compl_result(compl, &result);
+		odp_crypto_compl_free(compl);
+		after_crypto_pkt[i] = result.pkt;
 		after_crypto_ctx[i] = result.ctx;
 
 		dprintf("AFTER CRYPTO after_crypto_pkts %d\n", after_crypto_pkts);
@@ -1164,7 +1197,7 @@ int crypto_rx_handler(odp_pktout_queue_t *output_queues)
 				dprintf("ODP Main Loop 6: Decryption odp_packet_from_event rc=%d state=%d  packet=%d\n", rc, after_crypto_ctx[i]->state, i);
 
 			/* Decryption */
-			dst_port = 0;
+			dst_port = 1;
 
 			if (i == 0) {
 				is_encrypt_direction = false;
@@ -1219,7 +1252,7 @@ int crypto_rx_handler(odp_pktout_queue_t *output_queues)
 		} else {   /* Encryption */
 			dprintf("ODP Main Loop 7: Encryption odp_packet_from_event state=%d  packet=%d\n", after_crypto_ctx[i]->state, i);
 
-			dst_port = 1;
+			dst_port = 0;
 
 			if (i == 0) {
 				is_encrypt_direction = true;  /* init */
@@ -1277,11 +1310,6 @@ if ((args->appl.if_count == 1) && (ctx->lb == 0)) {
 		dprintf("TX_send drops %d packets from total %d\n", i - start_tx_index - sent, i - start_tx_index);
 	}
 
-	/* cleanup buffers */
-	for ( i = 0; i < after_crypto_pkts; i++ ) {
-		free_pkt_ctx(after_crypto_ctx[i]);
-	}
-
 	return after_crypto_pkts;
 }
 
@@ -1313,6 +1341,7 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	int num_pktio = 0;
 	pkt_ctx_t	*ctx[MAX_PKT_BURST];
 
+	ctx_buf_mng_init();
 	/* Copy all required handles to local memory */
 	for (i = 0; i < 2; i++) {
 		output_queues[i] =  port_io_config[i].ifout[0];
@@ -1419,11 +1448,6 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 		after_crypto_pkts = crypto_rx_handler(output_queues);
 		num_of_sent_to_crypto_packets -= after_crypto_pkts;
 
-		/* check if there were sent too many packets to crypto engine then wait - should not happened but it is protection from slow engine */
-		while ( num_of_sent_to_crypto_packets > MAX_CRYPTO_TO_CPU_PKT_THREASHOULD ) {
-			after_crypto_pkts = crypto_rx_handler(output_queues);
-			num_of_sent_to_crypto_packets -= after_crypto_pkts;
-		}
 	}
 
 	/* unreachable */
