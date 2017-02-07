@@ -94,7 +94,6 @@
 //#define CHECK_RC(rc,ctx,pkt_tbl,i,j)  if((rc!=PKT_CONTINUE)&&(rc!=PKT_POSTED)){printf("NOT CONTINUE!!! rc=%d i=%d j=%d\n",rc,i,j);}
 
 //#define PKT_ECHO_SUPPORT
-#define CSUM_HW_OFF_SUPPORT
 #define USE_APP_PREFETCH
 #define PREFETCH_SHIFT         3
 
@@ -865,9 +864,9 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 	ip->tos = ctx->ipsec.ip_tos;
 	ip->frag_offset = odp_cpu_to_be_16(ctx->ipsec.ip_frag_offset);
 	ip->chksum = 0;
-#ifndef CSUM_HW_OFF_SUPPORT
+#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
 	odph_ipv4_csum_update(pkt);
-#endif /* !CSUM_HW_OFF_SUPPORT */
+#endif /* !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || ... */
 
 	/* Correct the packet length and move payload into position */
 #ifdef MEMMOVE_OPTIMIZED
@@ -1145,9 +1144,9 @@ pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
 	ip->tos = ctx->ipsec.ip_tos;
 	ip->frag_offset = odp_cpu_to_be_16(ctx->ipsec.ip_frag_offset);
 	ip->chksum = 0;
-#ifndef CSUM_HW_OFF_SUPPORT
+#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
 	odph_ipv4_csum_update(pkt);
-#endif /* !CSUM_HW_OFF_SUPPORT */
+#endif /* !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || ... */
 
 	/* Fall through to next state */
 	return PKT_CONTINUE;
