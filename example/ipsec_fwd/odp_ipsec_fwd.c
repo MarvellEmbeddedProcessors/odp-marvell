@@ -776,14 +776,15 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 	/* Issue crypto request */
 	*skip = FALSE;
 	ctx->state = PKT_STATE_IPSEC_IN_FINISH;
-	if (odp_crypto_operation(&params,
+	int rc = odp_crypto_operation(&params,
 				 &posted,
-				 result)) {
+				 result);
 
+	if ((rc != 0) || (!posted && !result->ok)) {
 		dprintf("do_ipsec_in_classify 3   odp_crypto_operation failed\n");
-
 		return PKT_DROP;
 	}
+	
 
 	dprintf("do_ipsec_in_classify 4 finish=%d *skip=%d \n", posted, *skip);
 
@@ -1105,10 +1106,12 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 	}
 
 	/* Issue crypto request */
-	if (odp_crypto_operation(&ctx->ipsec.params,
+	int rc = odp_crypto_operation(&ctx->ipsec.params,
 				 &posted,
-				 result)) {
-		return PKT_DROP;
+				 result);
+	if ((rc != 0) || (!posted && !result->ok)) {
+	 
+			return PKT_DROP;
 	}
 	return (posted) ? PKT_POSTED : PKT_CONTINUE;
 }
