@@ -64,14 +64,14 @@
 /**
  * Buffer pool for packet IO
  */
-#define SHM_PKT_POOL_BUF_COUNT 512
+#define SHM_PKT_POOL_BUF_COUNT 4096
 #define SHM_PKT_POOL_BUF_SIZE  2048
 #define SHM_PKT_POOL_SIZE      (SHM_PKT_POOL_BUF_COUNT * SHM_PKT_POOL_BUF_SIZE)
 
 /**
  * Buffer pool for crypto session output packets
  */
-#define SHM_OUT_POOL_BUF_COUNT 512
+#define SHM_OUT_POOL_BUF_COUNT 4096
 #define SHM_OUT_POOL_BUF_SIZE  2048
 #define SHM_OUT_POOL_SIZE      (SHM_OUT_POOL_BUF_COUNT * SHM_OUT_POOL_BUF_SIZE)
 

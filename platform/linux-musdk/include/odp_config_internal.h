@@ -37,7 +37,7 @@ extern "C" {
 #define MVSAM_RING_SIZE		256
 #define MVSAM_MAX_NUM_SESSIONS_PER_RING	2
 
-#define MUSDK_TOTAL_SHM_SIZE		(9 * 1024 * 1024)
+#define MUSDK_TOTAL_SHM_SIZE		(48 * 1024 * 1024)
 /* MUSDK - end */
 
 /*
