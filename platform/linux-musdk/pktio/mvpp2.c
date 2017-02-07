@@ -661,8 +661,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		int rc;
           	rc = fill_bpool(pktio_entry->s.pkt_mvpp2.pool, pktio_entry->s.pkt_mvpp2.bpool, thds[get_thr_id()].hif,
 				CONFIG_BURST_SIZE, pktio_entry->s.pkt_mvpp2.mtu);
-          	if (rc == -1)
-			ODP_ERR("can't fill port pool with buffs!\n");
+          	if (rc < -1)
+				ODP_ERR("can't fill port pool with buffs!\n");
         }
 
 	if (!inqs[rxq_id].lockless)
