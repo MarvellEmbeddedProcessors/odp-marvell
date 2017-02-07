@@ -93,7 +93,6 @@ static odp_crypto_global_t *global;
 #define REQ_THRSHLD_LO		(PROCESS_PKT_BURST_SIZE)
 #define REQ_THRSHLD_HI		((MVSAM_RING_SIZE<<1)-PROCESS_PKT_BURST_SIZE)
 #define IO_ENQ_THRSHLD_LO	(PROCESS_PKT_BURST_SIZE<<1)
-#define IO_ENQ_THRSHLD_HI	(MVSAM_RING_SIZE-(PROCESS_PKT_BURST_SIZE<<1))
 #define APP_Q_THRSHLD_HI	(REQ_THRSHLD_HI)
 
 struct crypto_session {
@@ -294,37 +293,31 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 	NOTUSED(result);
 
 	if (app_enqs_cnt >= APP_Q_THRSHLD_HI) {
-		ODP_PRINT("App Q is full (%d)!\n", app_enqs_cnt);
+		ODP_DBG("App Q is full (%d)!\n", app_enqs_cnt);
 		*posted = 0;
 		result->ok = 0;
-		return -1;
+		return 0;
+	}
+
+	/* If we reach to the end of the ring, we need to "drain" it a little */
+	if (!params || (io_enqs_cnt >= IO_ENQ_THRSHLD_LO)) {
+		num_reqs = PROCESS_PKT_BURST_SIZE;
+		rc = sam_cio_deq(global->cio, sam_res_params, &num_reqs);
+		if(odp_unlikely(rc)) {
+			ODP_ERR("odp_musdk: failed to dequeue request\n");
+			/* TODO: drop all err pkts! */
+			return rc;
+		}
+		/* Enqueue to app Q */
+		rc = mvsam_result_enq(sam_res_params, num_reqs);
+		if (odp_unlikely(rc))
+			return rc;
+
+		if (!params)
+			return 0;
 	}
 
 	if (requests_cnt >= REQ_THRSHLD_LO) {
-		/* If we reach to the end of the ring, we need to "drain" it a little */
-		if (io_enqs_cnt >= IO_ENQ_THRSHLD_LO) {
-			num_reqs = PROCESS_PKT_BURST_SIZE;
-			rc = sam_cio_deq(global->cio, sam_res_params, &num_reqs);
-			if(odp_unlikely(rc)) {
-				ODP_ERR("odp_musdk: failed to dequeue request\n");
-				/* TODO: drop all err pkts! */
-				return rc;
-			}
-			/* Enqueue to app Q */
-			rc = mvsam_result_enq(sam_res_params, num_reqs);
-			if (odp_unlikely(rc))
-				return rc;
-
-/*
-			if (io_enqs_cnt >= IO_ENQ_THRSHLD_HI) {
-				ODP_DBG("SAM ring is full (%d)!\n", io_enqs_cnt);
-				*posted = 0;
-				result->ok = 0;
-				return -1;
-			}
-*/
-		}
-
 		num_reqs = PROCESS_PKT_BURST_SIZE;
 		if ((io_enqs_offs > requests_offs) &&
 		    ((REQ_THRSHLD_HI - io_enqs_offs) < PROCESS_PKT_BURST_SIZE))
@@ -353,7 +346,7 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 		ODP_DBG("Requests ring is full (%d)!\n", requests_cnt);
 		*posted = 0;
 		result->ok = 0;
-		return -1;
+		return 0;
 	}
 
 	session  = (struct crypto_session *)params->session;
