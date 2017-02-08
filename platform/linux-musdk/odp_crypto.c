@@ -287,7 +287,7 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 	struct crypto_session	*session;
 	struct sam_cio_op_result sam_res_params[MVSAM_RING_SIZE];
 	u16			 num_reqs;
-	int			 rc = 0;
+	int			 rc = 0, flush_io_qs = 0;
 	unsigned int		 tmp_offs;
 
 	NOTUSED(result);
@@ -299,8 +299,14 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 		return 0;
 	}
 
+	/* TODO: temporary W/A for immediate flushing of the SAM IO Qs
+	 * until we support it correctly by timeouts */
+	if (!params)
+		flush_io_qs = 1;
+
 	/* If we reach to the end of the ring, we need to "drain" it a little */
-	if (!params || (io_enqs_cnt >= IO_ENQ_THRSHLD_LO)) {
+	if ((flush_io_qs && io_enqs_cnt) ||
+	    (io_enqs_cnt >= IO_ENQ_THRSHLD_LO)) {
 		num_reqs = PROCESS_PKT_BURST_SIZE;
 		rc = sam_cio_deq(global->cio, sam_res_params, &num_reqs);
 		if(odp_unlikely(rc)) {
@@ -312,12 +318,10 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 		rc = mvsam_result_enq(sam_res_params, num_reqs);
 		if (odp_unlikely(rc))
 			return rc;
-
-		if (!params)
-			return 0;
 	}
 
-	if (requests_cnt >= REQ_THRSHLD_LO) {
+	if ((flush_io_qs && requests_cnt) ||
+	    (requests_cnt >= REQ_THRSHLD_LO)) {
 		num_reqs = PROCESS_PKT_BURST_SIZE;
 		if ((io_enqs_offs > requests_offs) &&
 		    ((REQ_THRSHLD_HI - io_enqs_offs) < PROCESS_PKT_BURST_SIZE))
@@ -338,6 +342,9 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 		if (io_enqs_offs == REQ_THRSHLD_HI)
 			io_enqs_offs = 0;
 	}
+
+	if (flush_io_qs)
+		return 0;
 
 	tmp_offs = requests_offs+1;
 	if (tmp_offs == REQ_THRSHLD_HI)
