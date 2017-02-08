@@ -195,6 +195,7 @@ typedef struct {
 	uint32_t *ah_seq;               /**< AH sequence number location */
 	uint32_t *esp_seq;              /**< ESP sequence number location */
 	uint16_t *tun_hdr_id;           /**< Tunnel header ID > */
+
 } ipsec_ctx_t;
 
 /**
@@ -551,7 +552,7 @@ void initialize_intf(char *intf, int if_index)
 	odp_pktio_param_init(&pktio_param);
 
         pktio_param.in_mode  = ODP_PKTIN_MODE_DIRECT;
-		pktio_param.out_mode = ODP_PKTIN_MODE_DIRECT;
+	pktio_param.out_mode = ODP_PKTIN_MODE_DIRECT;
 
 	/*
 	 * Open a packet IO instance for thread and get default output queue
@@ -783,7 +784,6 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 		dprintf("do_ipsec_in_classify 3   odp_crypto_operation failed\n");
 		return PKT_DROP;
 	}
-	
 
 	dprintf("do_ipsec_in_classify 4 finish=%d *skip=%d \n", posted, *skip);
 
@@ -1035,7 +1035,7 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 #endif
 		dprintf("out_classify %s odp_packet_push_tail failed PKT_DROP\n", __func__ );
 		return PKT_DROP;
-		}
+	}
 
 	/* Save remaining context */
 	ctx->ipsec.hdr_len = hdr_len;
@@ -1109,8 +1109,7 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 				 &posted,
 				 result);
 	if ((rc != 0) || (!posted && !result->ok)) {
-	 
-			return PKT_DROP;
+		return PKT_DROP;
 	}
 	return (posted) ? PKT_POSTED : PKT_CONTINUE;
 }
@@ -1224,7 +1223,7 @@ int crypto_rx_handler(odp_pktout_queue_t *output_queues)
 
 			if (odp_unlikely(rc == PKT_DROP)) {
 				odp_packet_free(after_crypto_pkt[i]);
-				
+
 				if (i != start_tx_index) {
 					sent = odp_pktout_send(output_queues[dst_port], &after_crypto_pkt[start_tx_index], i - start_tx_index);
 				}
@@ -1306,7 +1305,7 @@ if ((args->appl.if_count == 1) && (ctx->lb == 0)) {
 #endif /* PKT_ECHO_SUPPORT */
 
 	sent = odp_pktout_send(output_queues[dst_port], &after_crypto_pkt[start_tx_index], i - start_tx_index);
-		
+
 	dprintf("ODP Main Loop 11: TX sent=%d i=%d  start_index-%d\n", sent, i, start_tx_index);
 	if (sent < i - start_tx_index) {
 		dprintf("TX_send drops %d packets from total %d\n", i - start_tx_index - sent, i - start_tx_index);
@@ -1342,33 +1341,33 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	int port = 0;
 	int num_pktio = 0;
 	pkt_ctx_t	*ctx[MAX_PKT_BURST];
+	int num_of_sent_to_crypto_packets = 0;
+	int empty_rx_counters = 0;
+	int after_crypto_pkts;
 
 	ctx_buf_mng_init();
-	/* Copy all required handles to local memory */
-	for (i = 0; i < 2; i++) {
-		output_queues[i] =  port_io_config[i].ifout[0];
-		inq = port_io_config[i].ifin[0];
-		input_queues[i] = inq;
-	}
 
-	num_pktio = 2;
-	port = 0;
+	num_pktio = args->appl.if_count;
 
 	if (num_pktio == 0) {
 		dprintf("No pktio devices found\n");
 		abort();
 	}
-	inq = input_queues[0];
 
-	int num_of_sent_to_crypto_packets = 0;
+	/* Copy all required handles to local memory */
+	for (i = 0; i < num_pktio; i++) {
+		output_queues[i] =  port_io_config[i].ifout[0];
+		inq = port_io_config[i].ifin[0];
+		input_queues[i] = inq;
+	}
 
 	odp_barrier_wait(&sync_barrier);
 
 	/* Loop packets */
+	port = 0;
 	for (;;) {
 		pkt_disposition_e rc;
 		odp_crypto_op_result_t result;
-
 		odp_bool_t skip = FALSE;
 
 		if (num_pktio > 1) {
@@ -1380,8 +1379,18 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 
 		pkts = odp_pktin_recv(inq, pkt_tbl, MAX_PKT_BURST);
 		if (pkts < 1) {
+
+#define EMPTY_RX_THRESHOULD 100
+			empty_rx_counters++;
+			if ( empty_rx_counters > EMPTY_RX_THRESHOULD ) {
+				odp_crypto_operation(NULL, NULL, NULL);
+				empty_rx_counters = 0;
+				goto crypto_complete;
+			}
 			continue;
 		}
+
+		empty_rx_counters = 0;
 
 		dprintf("ODP Main Loop 0: odp_pktin_recv  pkts=%d\n", pkts);
 
@@ -1419,9 +1428,9 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 				if (odp_unlikely(skip)) {
 					dprintf("ODP Main Loop 4.1: !!! Jump to TX rc=%d state=%d	packet=%d\n", rc, ctx[i]->state, i);
 					continue; /*  ctx->state = PKT_STATE_TRANSMIT;   packet will be sent */
-				} 
+				}
 				/* else {
-				//	ctx[i]->state = PKT_STATE_IPSEC_OUT_SEQ;   
+				//	ctx[i]->state = PKT_STATE_IPSEC_OUT_SEQ;
 				//	if (odp_queue_enq(seqnumq, ev))    // not clear why need seqnumq enq
 				//		rc = PKT_DROP;
 				} */
@@ -1443,13 +1452,9 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 				num_of_sent_to_crypto_packets++;
 			}
 		}
-
-
-		int after_crypto_pkts;
-
+crypto_complete:
 		after_crypto_pkts = crypto_rx_handler(output_queues);
 		num_of_sent_to_crypto_packets -= after_crypto_pkts;
-
 	}
 
 	/* unreachable */
