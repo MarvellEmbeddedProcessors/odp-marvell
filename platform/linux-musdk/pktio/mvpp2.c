@@ -663,7 +663,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	}
 
 	/* Temporary work-around : Check if we need to re-fill BPool from the SW-pool */
-	pp2_bpool_get_num_buffs(thds[get_thr_id()].hif, pktio_entry->s.pkt_mvpp2.bpool, &tmp_num_buffs);
+	pp2_bpool_get_num_buffs(pktio_entry->s.pkt_mvpp2.bpool, &tmp_num_buffs);
 	if (unlikely(tmp_num_buffs <=  2 * CONFIG_BURST_SIZE)) {
 		int rc;
           	rc = fill_bpool(pktio_entry->s.pkt_mvpp2.pool, pktio_entry->s.pkt_mvpp2.bpool, thds[get_thr_id()].hif,
