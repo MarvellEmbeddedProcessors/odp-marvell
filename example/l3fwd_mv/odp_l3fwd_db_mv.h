@@ -19,6 +19,9 @@ extern "C" {
 #define MAX_DB  65536
 #define MAX_STRING  32
 
+#ifndef _DST_IP_FRWD_
+#define _IPV6_ENABLED_
+#endif
 /**
  * Max number of flows
  */
@@ -30,6 +33,17 @@ extern "C" {
 #define FWD_DEF_BUCKET_ENTRIES	4
 
 /**
+ * IPv4 hash key size
+ */
+#define IPV4_5TUPLE_KEY_SIZE (sizeof(int32_t)+sizeof(int32_t)+ \
+						sizeof(int16_t)+sizeof(int16_t)+sizeof(int8_t))
+
+/**
+ * IPv6 hash key size
+ */
+#define IPV6_5TUPLE_KEY_SIZE (5 * sizeof(uint64_t))
+
+/**
  * IP address range (subnet)
  */
 typedef struct ip_addr_range_s {
@@ -37,12 +51,28 @@ typedef struct ip_addr_range_s {
 	uint32_t  depth;    /**< subnet bit width */
 } ip_addr_range_t;
 
+typedef struct ipv6_addr_range_s {
+	union ipv6_addr_u {
+		struct u64_s {
+			uint64_t  ipv6_hi;     /**< IP address, host endianness */
+			uint64_t  ipv6_lo;     /**< IP address, host endianness */
+		} u64;
+		struct u16_s {
+			uint16_t ipv6_u16[8];
+		} u16;
+		struct u8_s {
+			uint8_t ipv6_u8[16];
+		} u8;
+	} addr;
+	uint32_t  prefix;    		/**< subnet bit width */
+} ipv6_addr_range_t;
+
 /**
  * TCP/UDP flow
  */
-typedef struct ipv4_tuple5_s {
-	union {
-		struct {
+ typedef struct tuple5_s {
+	union tuple5_u {
+		struct ipv4_5t_s{
 			int32_t src_ip;
 			int32_t dst_ip;
 			int16_t src_port;
@@ -50,29 +80,63 @@ typedef struct ipv4_tuple5_s {
 			int8_t  proto;
 			int8_t  pad1;
 			int16_t pad2;
-		};
-		struct {
+#ifdef _IPV6_ENABLED_
+			int64_t pad3;
+			int64_t pad4;
+			int64_t pad5;
+#endif
+		} ipv4_5t;
+		struct ip_5t_s{
 			int64_t hi64;
 			int64_t lo64;
-		};
-	};
-} ipv4_tuple5_t ODP_ALIGNED_CACHE;
+#ifdef _IPV6_ENABLED_
+			int64_t pad6;
+			int64_t pad7;
+			int64_t pad8;
+#endif
+		} ip_5t;
+#ifdef _IPV6_ENABLED_
+		struct ipv6_5t_s{
+			uint8_t src_ipv6[16];
+			uint8_t dst_ipv6[16];
+			int16_t src_port;
+			int16_t dst_port;
+			int8_t  proto;
+			int8_t  pad9;
+			int16_t pad10;
+		} ipv6_5t;
+#endif
+	} u5t;
+	uint8_t ip_protocol;	/*ODPH_IPV4 or ODPH_IPV6*/
+} tuple5_t ODP_ALIGNED_CACHE;
 
 /**
  * Forwarding data base entry
  */
 typedef struct fwd_db_entry_s {
 	struct fwd_db_entry_s *next;          /**< Next entry on list */
-	char                    oif[OIF_LEN]; /**< Output interface name */
-	int			oif_id;	      /**< Output interface idx */
+	char				oif[OIF_LEN]; /**< Output interface name */
+	uint8_t				oif_id;	      /**< Output interface idx */
 	odph_ethaddr_t		src_mac;      /**< Output source MAC */
 	odph_ethaddr_t		dst_mac;      /**< Output destination MAC */
 #ifndef _DST_IP_FRWD_
-	ip_addr_range_t		src_subnet;  /*subnet previously*/     /**< Subnet for this router */
-	ip_addr_range_t		dst_subnet;
-	uint16_t			src_port;
-	uint16_t			dst_port;
-	uint8_t				protocol;	/*0 - UDP, 1 - TCP */
+	union ip_hdr_u{
+		struct ipv4_s {
+			ip_addr_range_t		src_subnet;  /*subnet previously*/     /**< Subnet for this router */
+			ip_addr_range_t		dst_subnet;
+			uint16_t			src_port;
+			uint16_t			dst_port;
+			uint8_t				protocol;	/*0 - UDP, 1 - TCP */
+		} ipv4;
+		struct ipv6_s {
+			ipv6_addr_range_t	src_subnet;  	/*subnet previously*/     /**< Subnet for this router */
+			ipv6_addr_range_t	dst_subnet;
+			uint16_t			src_port;
+			uint16_t			dst_port;
+			uint8_t				protocol;		/*0 - UDP, 1 - TCP */
+		} ipv6;
+	} u;
+	uint8_t ip_protocol;	/*ODPH_IPV4 or ODPH_IPV6*/
 #else
 	ip_addr_range_t		subnet;
 #endif
@@ -137,11 +201,11 @@ void dump_fwd_db(void);
 /**
  * Find a matching forwarding database entry
  *
- * @param key  ipv4 tuple
+ * @param key  ipv4/ipv6 tuple
  *
  * @return pointer to forwarding DB entry else NULL
  */
-fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key);
+fwd_db_entry_t *find_fwd_db_entry(tuple5_t *key);
 
 /**
  * Parse text string representing an IPv4 address or subnet
@@ -155,6 +219,21 @@ fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key);
  * @return 0 if successful else -1
  */
 int parse_ipv4_string(char *ipaddress, uint32_t *addr, uint32_t *depth);
+
+/**
+ * Parse text string representing an IPv6 address or subnet
+ *
+ * String is of the format "XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX(/W)" where
+ * "XXXX" is heximal value and "/W" is optional subnet length
+ * Or condensed notation: XXXX:XXXX:XXXX:XXXX::(0/W)
+ *
+ * @param ipaddress  Pointer to IP address/subnet string to convert
+ * @param addr_hi    Pointer to return high 64B of IPv6 address, host endianness
+ * @param addr_lo    Pointer to return low 64B of IPv6 address, host endianness
+ * @param depth      Pointer to subnet bit width
+ * @return 0 if successful else -1
+ */
+int parse_ipv6_string(char *ipaddress, uint64_t *addr_hi, uint64_t *addr_lo, uint32_t *depth);
 
 #ifdef __cplusplus
 }

@@ -15,6 +15,7 @@
 #include <odp_api.h>
 #include <odp_l3fwd_db_mv.h>
 #include <odp/helper/ip.h>
+#include <protocols/ip.h>
 #include <xxhash.h>
 
 /** Jenkins hash support.
@@ -51,18 +52,23 @@
  * Compute hash value from a flow
  */
 static inline
-uint64_t l3fwd_calc_hash(ipv4_tuple5_t *key)
+uint64_t l3fwd_calc_hash(tuple5_t *key)
 {
 #ifdef _DST_IP_FRWD_
 	uint64_t l4_ports = 0;
 	uint32_t dst_ip, src_ip;
 
-	src_ip = key->src_ip;
-	dst_ip = key->dst_ip + JHASH_GOLDEN_RATIO;
+	src_ip = key->u5t.ipv4_5t.src_ip;
+	dst_ip = key->u5t.ipv4_5t.dst_ip + JHASH_GOLDEN_RATIO;
 	FWD_BJ3_MIX(src_ip, dst_ip, l4_ports);
 	return l4_ports;
 #else
-	return XXH_fast32((void*)key, sizeof(ipv4_tuple5_t), 0);
+#ifdef _IPV6_ENABLED_
+	int key_size = (key->ip_protocol == ODPH_IPV4) ? IPV4_5TUPLE_KEY_SIZE : IPV6_5TUPLE_KEY_SIZE;
+	return XXH_fast32((void*)key, key_size, 0);
+#else
+	return XXH_fast32((void*)key, IPV4_5TUPLE_KEY_SIZE, 0);
+#endif
 #endif
 }
 
@@ -110,6 +116,94 @@ int parse_ipv4_string(char *ipaddress, uint32_t *addr, uint32_t *depth)
 }
 
 /**
+ * Parse text string representing an IPv6 address or subnet
+ *
+ * String is of the format "XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX(/W)" where
+ * "XXXX" is heximal value and "/W" is optional subnet length
+ * Or condensed notation: XXXX:XXXX:XXXX:XXXX::(0/W)
+ *
+ * @param ipaddress  Pointer to IP address/subnet string to convert
+ * @param addr_hi    Pointer to return high 64B of IPv6 address, host endianness
+ * @param addr_lo    Pointer to return low 64B of IPv6 address, host endianness
+ * @param depth      Pointer to subnet bit width
+ * @return 0 if successful else -1
+ */
+int parse_ipv6_string(char *ipaddress, uint64_t *addr_hi, uint64_t *addr_lo, uint32_t *depth)
+{
+	int group;
+	int j;
+	char* sptr = ipaddress;
+	char* endptr;
+	int b[8];
+	int double_sep = 0;
+	int qualifier = 128;
+
+	for (group = 0; group < 7; group++) {
+		b[group] = strtol(sptr, &endptr, 16);
+		if ((b[group] < 0) || (b[group] > 0xFFFF) || !(*endptr)) {
+			return -1;
+		}
+		if (*endptr != ':') {
+			return -1;
+		}
+		++endptr;
+		if (!(*endptr)) {
+			return -1;
+		}
+		if (*endptr == ':') {
+			/* found '::' */
+			double_sep = 1;
+			++endptr;
+			break;
+		}
+		sptr = endptr;
+	}
+
+	if (double_sep) {
+		for(j = group + 1; j < 8; j++) {
+			b[j] = 0;
+		}
+		if (*endptr) {
+			if (*endptr != '0') {
+				return -1;
+			}
+			endptr++;
+			if (!(*endptr)) {
+				return -1;
+			}
+		}
+	} else {
+		b[7] = strtol(sptr, &endptr, 16);
+		if ((b[7] < 0) || (b[7] > 0xFFFF)) {
+			return -1;
+		}
+	}
+
+	if (*endptr) {
+		/* prefix should follow */
+		if (*endptr != '/') {
+			return -1;
+		}
+		endptr++;
+		if (!(*endptr)) {
+			return -1;
+		}
+		qualifier = strtol(endptr, NULL, 10);
+	}
+
+	if ((qualifier < 0) || (qualifier > 128))
+		return -1;
+
+	*addr_hi = (uint64_t)odp_cpu_to_be_16(b[0]) | (uint64_t)odp_cpu_to_be_16(b[1]) << 16 |
+			(uint64_t)odp_cpu_to_be_16(b[2]) << 32 | (uint64_t)odp_cpu_to_be_16(b[3]) << 48;
+	*addr_lo = (uint64_t)odp_cpu_to_be_16(b[4]) | (uint64_t)odp_cpu_to_be_16(b[5]) << 16 |
+			(uint64_t)odp_cpu_to_be_16(b[6]) << 32 | (uint64_t)odp_cpu_to_be_16(b[7]) << 48;
+
+	*depth = qualifier;
+	return 0;
+}
+
+/**
  * Generate text string representing IPv4 range/subnet, output
  * in "XXX.XXX.XXX.XXX/W" format
  *
@@ -127,6 +221,35 @@ char *ipv4_subnet_str(char *b, ip_addr_range_t *range)
 		0xFF & ((range->addr) >>  8),
 		0xFF & ((range->addr) >>  0),
 		range->depth);
+	return b;
+}
+
+/**
+ * Generate text string representing IPv6 range/subnet, output
+ * in "XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX:XXXX/W" format
+ *
+ * @param b     Pointer to buffer to store string
+ * @param range Pointer to IPv6 address range
+ *
+ * @return Pointer to supplied buffer
+ */
+static inline
+char *ipv6_subnet_str(char *b, ipv6_addr_range_t *range)
+{
+	uint64_t temp_hi, temp_lo;
+	temp_hi = odp_cpu_to_be_64(range->addr.u64.ipv6_hi);
+	temp_lo = odp_cpu_to_be_64(range->addr.u64.ipv6_lo);
+
+	sprintf(b, "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x/%d",
+		(uint32_t)(0xFFFF & (temp_hi >> 48)),
+		(uint32_t)(0xFFFF & (temp_hi >> 32)),
+		(uint32_t)(0xFFFF & (temp_hi >> 16)),
+		(uint32_t)(0xFFFF & (temp_hi >> 0)),
+		(uint32_t)(0xFFFF & (temp_lo >> 48)),
+		(uint32_t)(0xFFFF & (temp_lo >> 32)),
+		(uint32_t)(0xFFFF & (temp_lo >> 16)),
+		(uint32_t)(0xFFFF & (temp_lo >> 0)),
+		range->prefix);
 	return b;
 }
 
@@ -153,7 +276,7 @@ char *mac_addr_str(char *b, odph_ethaddr_t *mac)
  * Flow cache table entry
  */
 typedef struct flow_entry_s {
-	ipv4_tuple5_t key;		/**< match key */
+	tuple5_t key;		/**< match key */
 	struct flow_entry_s *next;	/**< next entry in the bucket */
 	fwd_db_entry_t *fwd_entry;	/**< entry info in db */
 } flow_entry_t;
@@ -249,16 +372,25 @@ static inline flow_entry_t *get_new_flow(void)
 }
 
 static inline
-int match_key_flow(ipv4_tuple5_t *key, flow_entry_t *flow)
+int match_key_flow(tuple5_t *key, flow_entry_t *flow)
 {
-	if (key->hi64 == flow->key.hi64 && key->lo64 == flow->key.lo64)
+#if defined(_DST_IP_FRWD_) || !defined(_IPV6_ENABLED_)
+	if (key->u5t.ip_5t.hi64 == flow->key.u5t.ip_5t.hi64 &&
+		key->u5t.ip_5t.lo64 == flow->key.u5t.ip_5t.lo64)
 		return 1;
-
+#else
+	if (key->u5t.ip_5t.hi64 == flow->key.u5t.ip_5t.hi64 &&
+		key->u5t.ip_5t.lo64 == flow->key.u5t.ip_5t.lo64 &&
+		key->u5t.ip_5t.pad6 == flow->key.u5t.ip_5t.pad6 &&
+		key->u5t.ip_5t.pad7 == flow->key.u5t.ip_5t.pad7 &&
+		key->u5t.ip_5t.pad8 == flow->key.u5t.ip_5t.pad8)
+		return 1;
+#endif
 	return 0;
 }
 
 static inline
-flow_entry_t *lookup_fwd_cache(ipv4_tuple5_t *key, flow_bucket_t *bucket)
+flow_entry_t *lookup_fwd_cache(tuple5_t *key, flow_bucket_t *bucket)
 {
 	flow_entry_t *rst;
 
@@ -273,7 +405,7 @@ flow_entry_t *lookup_fwd_cache(ipv4_tuple5_t *key, flow_bucket_t *bucket)
 }
 
 static inline
-flow_entry_t *insert_fwd_cache(ipv4_tuple5_t *key,
+flow_entry_t *insert_fwd_cache(tuple5_t *key,
 			       flow_bucket_t *bucket,
 			       fwd_db_entry_t *entry)
 {
@@ -305,11 +437,14 @@ void init_fwd_hash_cache(void)
 	flow_bucket_t *bucket;
 	uint64_t hash;
 	uint32_t i, nb_hosts;
-	ipv4_tuple5_t key;
+	tuple5_t key;
 	int counter;
 	counter = 0;
 #ifndef _DST_IP_FRWD_
 	uint32_t j, dst_nb_hosts;
+#endif
+#ifdef _IPV6_ENABLED_
+	uint16_t src_tmp, dst_tmp;
 #endif
 
 	create_fwd_hash_cache();
@@ -325,7 +460,7 @@ void init_fwd_hash_cache(void)
 	for (entry = fwd_db->list; NULL != entry; entry = entry->next) {
 		nb_hosts = 1 << (32 - entry->subnet.depth);
 		for (i = 0; i < nb_hosts; i++) {
-			key.dst_ip = entry->subnet.addr + i;
+			key.u5t.ipv4_5t.dst_ip = entry->subnet.addr + i;
 			hash = l3fwd_calc_hash(&key);
 			hash &= fwd_lookup_cache.bkt_cnt - 1;
 			bucket = &fwd_lookup_cache.bucket[hash];
@@ -346,32 +481,83 @@ void init_fwd_hash_cache(void)
 	}
 #else
 	for (entry = fwd_db->list; NULL != entry; entry = entry->next) {
-		nb_hosts = 1 << (32 - entry->src_subnet.depth);
-		dst_nb_hosts = 1 << (32 - entry->dst_subnet.depth);
-		for (i = 0; i < nb_hosts; i++) {
-			for (j = 0; j < dst_nb_hosts; j++) {
-				key.src_ip = entry->src_subnet.addr + i;
-				key.dst_ip = entry->dst_subnet.addr + j;
-				key.src_port = entry->src_port;
-				key.dst_port = entry->dst_port;
-				key.proto = entry->protocol;
-				hash = l3fwd_calc_hash(&key);
-				hash &= fwd_lookup_cache.bkt_cnt - 1;
-				bucket = &fwd_lookup_cache.bucket[hash];
-				flow = lookup_fwd_cache(&key, bucket);
-				if (flow)
-					return;
+		if (odp_likely(entry->ip_protocol == ODPH_IPV4)) {
+			nb_hosts = 1 << (32 - entry->u.ipv4.src_subnet.depth);
+			dst_nb_hosts = 1 << (32 - entry->u.ipv4.dst_subnet.depth);
+			for (i = 0; i < nb_hosts; i++) {
+				for (j = 0; j < dst_nb_hosts; j++) {
+					memset(&key, 0, sizeof(key));
+					key.u5t.ipv4_5t.src_ip = entry->u.ipv4.src_subnet.addr + i;
+					key.u5t.ipv4_5t.dst_ip = entry->u.ipv4.dst_subnet.addr + j;
+					key.u5t.ipv4_5t.src_port = entry->u.ipv4.src_port;
+					key.u5t.ipv4_5t.dst_port = entry->u.ipv4.dst_port;
+					key.u5t.ipv4_5t.proto = entry->u.ipv4.protocol;
+					key.ip_protocol = ODPH_IPV4;
+					hash = l3fwd_calc_hash(&key);
+					hash &= fwd_lookup_cache.bkt_cnt - 1;
+					bucket = &fwd_lookup_cache.bucket[hash];
+					flow = lookup_fwd_cache(&key, bucket);
+					if (flow)
+						return;
 
-				flow = insert_fwd_cache(&key, bucket, entry);
-				if (!flow)
-					goto out;
-				counter++;
+					flow = insert_fwd_cache(&key, bucket, entry);
+					if (!flow)
+						goto out;
+					counter++;
 
-				if (counter >= FWD_MAX_FLOW_COUNT) {
-					printf("Reached the maximum number of DB flows\n");
-					goto out;
+					if (counter >= FWD_MAX_FLOW_COUNT) {
+						printf("Reached the maximum number of DB flows\n");
+						goto out;
+					}
 				}
 			}
+		} else {
+#ifdef _IPV6_ENABLED_
+			/*ODPH_IPV6*/
+			nb_hosts = 1 << (128 - entry->u.ipv6.src_subnet.prefix);
+			dst_nb_hosts = 1 << (128 - entry->u.ipv6.dst_subnet.prefix);
+			for (i = 0; i < nb_hosts; i++) {
+				for (j = 0; j < dst_nb_hosts; j++) {
+					memcpy(&key.u5t.ipv6_5t.src_ipv6,
+						&entry->u.ipv6.src_subnet.addr.u8.ipv6_u8, ODPH_IPV6ADDR_LEN);
+					memcpy(&key.u5t.ipv6_5t.dst_ipv6,
+						&entry->u.ipv6.dst_subnet.addr.u8.ipv6_u8, ODPH_IPV6ADDR_LEN);
+
+					if (((uint32_t)odp_cpu_to_be_16(entry->u.ipv6.src_subnet.addr.u16.ipv6_u16[7]) + i) > 0xFFFF)
+						break;
+					if (((uint32_t)odp_cpu_to_be_16(entry->u.ipv6.dst_subnet.addr.u16.ipv6_u16[7]) + j) > 0xFFFF)
+						continue;
+
+					src_tmp = odp_cpu_to_be_16(entry->u.ipv6.src_subnet.addr.u16.ipv6_u16[7]) + i;
+					dst_tmp = odp_cpu_to_be_16(entry->u.ipv6.dst_subnet.addr.u16.ipv6_u16[7]) + j;
+					key.u5t.ipv6_5t.src_ipv6[14] = (src_tmp >> 8) & 0xFF;
+					key.u5t.ipv6_5t.dst_ipv6[14] = (dst_tmp >> 8) & 0xFF;
+					key.u5t.ipv6_5t.src_ipv6[15] = src_tmp & 0xFF;
+					key.u5t.ipv6_5t.dst_ipv6[15] = dst_tmp & 0xFF;
+					key.u5t.ipv6_5t.src_port = entry->u.ipv6.src_port;
+					key.u5t.ipv6_5t.dst_port = entry->u.ipv6.dst_port;
+					key.u5t.ipv6_5t.proto = entry->u.ipv6.protocol;
+					key.ip_protocol = ODPH_IPV6;
+
+					hash = l3fwd_calc_hash(&key);
+					hash &= fwd_lookup_cache.bkt_cnt - 1;
+					bucket = &fwd_lookup_cache.bucket[hash];
+					flow = lookup_fwd_cache(&key, bucket);
+					if (flow)
+						return;
+
+					flow = insert_fwd_cache(&key, bucket, entry);
+					if (!flow)
+						goto out;
+					counter++;
+
+					if (counter >= FWD_MAX_FLOW_COUNT) {
+						printf("Reached the maximum number of DB flows\n");
+						goto out;
+					}
+				}
+			}
+#endif
 		}
 	}
 #endif
@@ -408,6 +594,9 @@ int create_fwd_db_entry(char *input, char **oif, uint8_t **dst_mac)
 	char *str;
 	char *save;
 	char *token;
+#ifndef _DST_IP_FRWD_
+	int protocol;
+#endif
 	fwd_db_entry_t *entry = &fwd_db->array[fwd_db->index];
 
 	*oif = NULL;
@@ -459,32 +648,64 @@ int create_fwd_db_entry(char *input, char **oif, uint8_t **dst_mac)
 			break;
 #else
 		case 0:
-			if (parse_ipv4_string(token, &entry->src_subnet.addr,
-					  &entry->src_subnet.depth) == -1) {
-				printf("create_fwd_db_entry: invalid SrcIp\n");
-				return -1;
+			if (parse_ipv4_string(token, &entry->u.ipv4.src_subnet.addr,
+					  &entry->u.ipv4.src_subnet.depth) == -1) {
+				if (parse_ipv6_string(token,
+						&entry->u.ipv6.src_subnet.addr.u64.ipv6_hi,
+						&entry->u.ipv6.src_subnet.addr.u64.ipv6_lo,
+						&entry->u.ipv6.src_subnet.prefix) == -1) {
+					printf("create_fwd_db_entry: invalid SrcIp\n");
+					return -1;
+				} else {
+					entry->ip_protocol = ODPH_IPV6;
+				}
+			} else {
+				entry->ip_protocol = ODPH_IPV4;
 			}
 			break;
 		case 1:
-			if (parse_ipv4_string(token, &entry->dst_subnet.addr,
-					  &entry->dst_subnet.depth) == -1) {
-				printf("create_fwd_db_entry: invalid DestIp\n");
-				return -1;
+			if (entry->ip_protocol == ODPH_IPV4) {
+				if (parse_ipv4_string(token, &entry->u.ipv4.dst_subnet.addr,
+						  &entry->u.ipv4.dst_subnet.depth) == -1) {
+					printf("create_fwd_db_entry: invalid DestIp\n");
+					return -1;
+				}
+			} else {
+				if (parse_ipv6_string(token,
+						&entry->u.ipv6.dst_subnet.addr.u64.ipv6_hi,
+						&entry->u.ipv6.dst_subnet.addr.u64.ipv6_lo,
+						&entry->u.ipv6.dst_subnet.prefix) == -1) {
+					printf("create_fwd_db_entry: invalid DestIp\n");
+					return -1;
+				}
 			}
 			break;
 		case 2:
-			entry->src_port = atoi(token);
+			if (entry->ip_protocol == ODPH_IPV4) {
+				entry->u.ipv4.src_port = atoi(token);
+			} else {
+				entry->u.ipv6.src_port = atoi(token);
+			}
 			break;
 		case 3:
-			entry->dst_port = atoi(token);
+			if (entry->ip_protocol == ODPH_IPV4) {
+				entry->u.ipv4.dst_port = atoi(token);
+			} else {
+				entry->u.ipv6.dst_port = atoi(token);
+			}
 			break;
 		case 4:
-			entry->protocol = atoi(token);
-			if (entry->protocol > 1) {
+			protocol = atoi(token);
+			if (protocol > 1) {
 				printf("create_fwd_db_entry: Invalid protocol\n");
 				return -1;
 			}
-			entry->protocol = (entry->protocol == 0) ? ODPH_IPPROTO_UDP : ODPH_IPPROTO_TCP;
+			protocol = (protocol == 0) ? ODPH_IPPROTO_UDP : ODPH_IPPROTO_TCP;
+			if (entry->ip_protocol == ODPH_IPV4) {
+				entry->u.ipv4.protocol = protocol;
+			} else {
+				entry->u.ipv6.protocol = protocol;
+			}
 			break;
 		case 5:
 			strncpy(entry->oif, token, OIF_LEN - 1);
@@ -508,6 +729,15 @@ int create_fwd_db_entry(char *input, char **oif, uint8_t **dst_mac)
 		/* Advance to next position */
 		pos++;
 	}
+
+#ifndef _DST_IP_FRWD_
+#ifndef _IPV6_ENABLED_
+	if (entry->ip_protocol == ODPH_IPV6) {
+		printf("IPv6 support is turned off\n");
+		return -1;
+	}
+#endif
+#endif
 
 	/* Add route to the list */
 	fwd_db->index++;
@@ -534,10 +764,10 @@ void resolve_fwd_db(char *intf, int portid, uint8_t *mac)
 
 void dump_fwd_db_entry(fwd_db_entry_t *entry)
 {
-	char subnet_str[MAX_STRING];
+	char subnet_str[8 * MAX_STRING];
 	char mac_str[MAX_STRING];
 #ifndef _DST_IP_FRWD_
-	char dst_subnet_str[MAX_STRING];
+	char dst_subnet_str[8 * MAX_STRING];
 #endif
 
 	mac_addr_str(mac_str, &entry->dst_mac);
@@ -546,11 +776,19 @@ void dump_fwd_db_entry(fwd_db_entry_t *entry)
 	       ipv4_subnet_str(subnet_str, &entry->subnet),
 	       entry->oif, mac_str);
 #else
-	printf("%-32s%-32s%-16d%-16d%-8d%-32s%-16s\n",
-	       ipv4_subnet_str(subnet_str, &entry->src_subnet),
-	       ipv4_subnet_str(dst_subnet_str, &entry->dst_subnet),
-	       entry->src_port, entry->dst_port, entry->protocol,
-	       entry->oif, mac_str);
+	if (entry->ip_protocol == ODPH_IPV4) {
+		printf("%-128s%-128s%-16d%-16d%-8d%-32s%-16s\n",
+			   ipv4_subnet_str(subnet_str, &entry->u.ipv4.src_subnet),
+			   ipv4_subnet_str(dst_subnet_str, &entry->u.ipv4.dst_subnet),
+			   entry->u.ipv4.src_port, entry->u.ipv4.dst_port, entry->u.ipv4.protocol,
+			   entry->oif, mac_str);
+	} else {
+		printf("%-128s%-128s%-16d%-16d%-8d%-32s%-16s\n",
+			   ipv6_subnet_str(subnet_str, &entry->u.ipv6.src_subnet),
+			   ipv6_subnet_str(dst_subnet_str, &entry->u.ipv6.dst_subnet),
+			   entry->u.ipv6.src_port, entry->u.ipv6.dst_port,
+			   entry->u.ipv6.protocol, entry->oif, mac_str);
+	}
 #endif
 }
 
@@ -566,7 +804,7 @@ void dump_fwd_db(void)
 #else
 	printf("Routing table\n"
 	       "-----------------\n"
-	       "%-32s%-32s%-16s%-16s%-8s%-32s%-16s\n",
+	       "%-128s%-128s%-16s%-16s%-8s%-32s%-16s\n",
 	       "src_subnet", "dst_subnet", "src_port", "dst_port", "proto", "next_hop", "dest_mac");
 #endif
 	for (entry = fwd_db->list; NULL != entry; entry = entry->next)
@@ -575,7 +813,9 @@ void dump_fwd_db(void)
 	printf("\n");
 }
 
-fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key)
+
+
+fwd_db_entry_t *find_fwd_db_entry(tuple5_t *key)
 {
 #ifdef _DST_IP_FRWD_
 	fwd_db_entry_t *entry;
@@ -583,13 +823,6 @@ fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key)
 	flow_entry_t *flow;
 	flow_bucket_t *bucket;
 	uint64_t hash;
-
-#ifdef _DST_IP_FRWD_
-	int32_t dst_ip = key->dst_ip;
-	key->hi64 = 0;
-	key->lo64 = 0;
-	key->dst_ip = dst_ip;
-#endif
 
 	/* first find in cache */
 	hash = l3fwd_calc_hash(key);
@@ -606,7 +839,7 @@ fwd_db_entry_t *find_fwd_db_entry(ipv4_tuple5_t *key)
 		mask = ((1u << entry->subnet.depth) - 1) <<
 			(32 - entry->subnet.depth);
 
-		if (entry->subnet.addr == (key->dst_ip & mask))
+		if (entry->subnet.addr == (key->u5t.ipv4_5t.dst_ip & mask))
 			break;
 	}
 

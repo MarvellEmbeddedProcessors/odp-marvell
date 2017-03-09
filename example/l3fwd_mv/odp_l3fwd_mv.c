@@ -191,37 +191,68 @@ static inline void ipv4_dec_ttl_csum_update(odph_ipv4hdr_t *ip)
 static inline int l3fwd_pkt_hash(odp_packet_t pkt, int sif)
 {
 	fwd_db_entry_t *entry;
-	ipv4_tuple5_t key;
+	tuple5_t key;
 	odph_ethhdr_t *eth;
-	odph_udphdr_t  *udp;
 	odph_ipv4hdr_t *ip;
 	int dif;
-
-	ip = odp_packet_l3_ptr(pkt, NULL);
-	key.dst_ip = odp_be_to_cpu_32(ip->dst_addr);
 #ifndef _DST_IP_FRWD_
-	key.src_ip = odp_be_to_cpu_32(ip->src_addr);
-	key.proto = ip->proto;
-	key.pad1 = 0;
-	key.pad2 = 0;
+	odph_udphdr_t  *udp;
+#endif
+#ifdef _IPV6_ENABLED_
+	odph_ipv6hdr_t *ip6;
 #endif
 
-	if (odp_likely((ip->proto == ODPH_IPPROTO_UDP) ||
-	    (ip->proto == ODPH_IPPROTO_TCP))) {
-		/* UDP or TCP*/
+	memset(&key, 0, sizeof(tuple5_t));
+	ip = odp_packet_l3_ptr(pkt, NULL);
+#ifdef _IPV6_ENABLED_
+	if (odp_likely(ODPH_IPV4HDR_VER(ip->ver_ihl) == ODPH_IPV4)) {
+#endif
+		key.u5t.ipv4_5t.dst_ip = odp_be_to_cpu_32(ip->dst_addr);
+		if (odp_unlikely((ip->ttl <= 1) ||
+			!((ip->proto == ODPH_IPPROTO_UDP) || (ip->proto == ODPH_IPPROTO_TCP)))) {
+			/* drop zero TTL or not TCP/UDP traffic */
+			odp_packet_free(pkt);
+			return INVALID_ID;
+		}
+
+#ifndef _DST_IP_FRWD_
+		key.ip_protocol = ODPH_IPV4;
+		key.u5t.ipv4_5t.src_ip = odp_be_to_cpu_32(ip->src_addr);
+		key.u5t.ipv4_5t.proto = ip->proto;
 		udp = (odph_udphdr_t *)odp_packet_l4_ptr(pkt, NULL);
-		key.src_port = odp_be_to_cpu_16(udp->src_port);
-		key.dst_port = odp_be_to_cpu_16(udp->dst_port);
+		key.u5t.ipv4_5t.src_port = odp_be_to_cpu_16(udp->src_port);
+		key.u5t.ipv4_5t.dst_port = odp_be_to_cpu_16(udp->dst_port);
+#endif
+
+		entry = find_fwd_db_entry(&key);
+		if (odp_likely(entry != NULL)) {
+			ipv4_dec_ttl_csum_update(ip);
+		}
+#ifdef _IPV6_ENABLED_
 	} else {
-		/* drop not TCP/UDP traffic */
-		odp_packet_free(pkt);
-		return INVALID_ID;
+		ip6 = odp_packet_l3_ptr(pkt, NULL);
+		key.ip_protocol = ODPH_IPV6;
+		if (odp_unlikely((ip6->hop_limit <= 1) ||
+			!((ip6->next_hdr == ODPH_IPPROTO_UDP) || (ip6->next_hdr == ODPH_IPPROTO_TCP)))) {
+			/* drop zero TTL or not TCP/UDP traffic */
+			odp_packet_free(pkt);
+			return INVALID_ID;
+		}
+
+		key.u5t.ipv6_5t.proto = ip6->next_hdr;
+		memcpy(&key.u5t.ipv6_5t.dst_ipv6, ip6->dst_addr, ODPH_IPV6ADDR_LEN);
+		memcpy(&key.u5t.ipv6_5t.src_ipv6, ip6->src_addr, ODPH_IPV6ADDR_LEN);
+		udp = (odph_udphdr_t *)odp_packet_l4_ptr(pkt, NULL);
+		key.u5t.ipv6_5t.src_port = odp_be_to_cpu_16(udp->src_port);
+		key.u5t.ipv6_5t.dst_port = odp_be_to_cpu_16(udp->dst_port);
+
+		entry = find_fwd_db_entry(&key);
+		if (odp_likely(entry != NULL)) {
+			ip6->hop_limit--;
+		}
 	}
-	entry = find_fwd_db_entry(&key);
-	/*
-	ipv4_dec_ttl_csum_update(ip);
-	eth = odp_packet_l2_ptr(pkt, NULL);
-	*/
+#endif
+
 	if (odp_likely(entry != NULL)) {
 		eth = odp_packet_l2_ptr(pkt, NULL);
 		eth->src = entry->src_mac;
@@ -234,8 +265,6 @@ static inline int l3fwd_pkt_hash(odp_packet_t pkt, int sif)
 		odp_packet_free(pkt);
 		return INVALID_ID;
 	}
-
-	ipv4_dec_ttl_csum_update(ip);
 
 	return dif;
 }
@@ -287,7 +316,8 @@ static inline int drop_err_pkts(odp_packet_t pkt_tbl[], unsigned num)
 		if (global.cmd_args.error_check)
 			err = odp_packet_has_error(pkt);
 
-		if (odp_unlikely(err || !odp_packet_has_ipv4(pkt))) {
+		if (odp_unlikely(err || !(odp_packet_has_ipv4(pkt) ||
+								odp_packet_has_ipv6(pkt)))) {
 			odp_packet_free(pkt);
 			dropped++;
 		} else if (odp_unlikely(i != j++)) {
@@ -820,27 +850,58 @@ static void parse_routing_xml(app_args_t *args) {
 				exit(EXIT_FAILURE);
 			}
 			if (parse_ipv4_string(ezxml_child(tuple, "SrcIP")->txt,
-					&entry->src_subnet.addr, &entry->src_subnet.depth) == -1) {
-				printf("Skipping xml entry: invalid SrcIp\n");
-				memset(entry, 0, sizeof(fwd_db_entry_t));
-				continue;
+					&entry->u.ipv4.src_subnet.addr, &entry->u.ipv4.src_subnet.depth) == -1) {
+				if (parse_ipv6_string(ezxml_child(tuple, "SrcIP")->txt,
+						&entry->u.ipv6.src_subnet.addr.u64.ipv6_hi,
+						&entry->u.ipv6.src_subnet.addr.u64.ipv6_lo,
+						&entry->u.ipv6.src_subnet.prefix) == -1) {
+					printf("Skipping xml entry: invalid SrcIp\n");
+					memset(entry, 0, sizeof(fwd_db_entry_t));
+					continue;
+				} else {
+					entry->ip_protocol = ODPH_IPV6;
+				}
+			} else {
+				entry->ip_protocol = ODPH_IPV4;
 			}
-			if (parse_ipv4_string(ezxml_child(tuple, "DstIP")->txt,
-					&entry->dst_subnet.addr, &entry->dst_subnet.depth) == -1) {
-				printf("Skipping xml entry: invalid DstIp\n");
-				memset(entry, 0, sizeof(fwd_db_entry_t));
-				continue;
+			if (entry->ip_protocol == ODPH_IPV4) {
+				if (parse_ipv4_string(ezxml_child(tuple, "DstIP")->txt,
+						&entry->u.ipv4.dst_subnet.addr, &entry->u.ipv4.dst_subnet.depth) == -1) {
+					printf("Skipping xml entry: invalid DstIp\n");
+					memset(entry, 0, sizeof(fwd_db_entry_t));
+					continue;
+				}
+			} else {
+				if (parse_ipv6_string(ezxml_child(tuple, "DstIP")->txt,
+						&entry->u.ipv6.dst_subnet.addr.u64.ipv6_hi,
+						&entry->u.ipv6.dst_subnet.addr.u64.ipv6_lo,
+						&entry->u.ipv6.dst_subnet.prefix) == -1) {
+					printf("Skipping xml entry: invalid DstIp\n");
+					memset(entry, 0, sizeof(fwd_db_entry_t));
+					continue;
+				}
 			}
-
-			entry->src_port = atoi(ezxml_child(tuple, "SrcPort")->txt);
-			entry->dst_port = atoi(ezxml_child(tuple, "DstPort")->txt);
-
+			if (entry->ip_protocol == ODPH_IPV4) {
+				entry->u.ipv4.src_port = atoi(ezxml_child(tuple, "SrcPort")->txt);
+				entry->u.ipv4.dst_port = atoi(ezxml_child(tuple, "DstPort")->txt);
+			} else {
+				entry->u.ipv6.src_port = atoi(ezxml_child(tuple, "SrcPort")->txt);
+				entry->u.ipv6.dst_port = atoi(ezxml_child(tuple, "DstPort")->txt);
+			}
 			if (strcmp(ezxml_child(tuple, "Protocol")->txt, "UDP") == 0) {
-				entry->protocol = ODPH_IPPROTO_UDP;
+				if (entry->ip_protocol == ODPH_IPV4) {
+					entry->u.ipv4.protocol = ODPH_IPPROTO_UDP;
+				} else {
+					entry->u.ipv6.protocol = ODPH_IPPROTO_UDP;
+				}
 			}
 			else {
 				if (strcmp(ezxml_child(tuple, "Protocol")->txt, "TCP") == 0) {
-					entry->protocol = ODPH_IPPROTO_TCP;
+					if (entry->ip_protocol == ODPH_IPV4) {
+						entry->u.ipv4.protocol = ODPH_IPPROTO_TCP;
+					} else {
+						entry->u.ipv6.protocol = ODPH_IPPROTO_TCP;
+					}
 				}
 				else {
 					printf("Skipping xml entry: Invalid protocol %s\n", ezxml_child(tuple, "Protocol")->txt);
@@ -858,11 +919,18 @@ static void parse_routing_xml(app_args_t *args) {
 				continue;
 			}
 
-			//Add route to the list
+#ifndef _IPV6_ENABLED_
+			/* skip IPv6 entries when IPv6 is disabled */
+			if (entry->ip_protocol == ODPH_IPV4) {
+#endif
+			/* Add route to the list */
 			fwd_db->index++;
 			entry->next = fwd_db->list;
 			fwd_db->list = entry;
 			++i;
+#ifndef _IPV6_ENABLED_
+			}
+#endif
 		}
 	}
 	ezxml_free(route_xml);
@@ -1189,7 +1257,7 @@ int main(int argc, char **argv)
 	args = &global.cmd_args;
 	parse_cmdline_args(argc, argv, args);
 
-	//read MACs table file and configure interface MAC addresses
+	/* read MACs table file and configure interface MAC addresses */
 	memset(if_mac_table, 0, sizeof(if_mac_t) * MAX_NB_PKTIO);
 
 #ifndef _DST_IP_FRWD_
