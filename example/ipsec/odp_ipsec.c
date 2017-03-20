@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <inttypes.h>
 
+#include <signal.h>
+
 #include <example_debug.h>
 
 #include <odp_api.h>
@@ -250,6 +252,19 @@ void odp_ipsec_stats_print(void)
     printf("ODP IPsec statistics: \n");
     printf("\tESP packets dropped:        %d\n", odp_ipsec_pkt_drop_cnt);
     printf("\tESP packets crypto dropped: %d\n", odp_ipsec_pkt_crypt_drop_cnt);
+}
+
+/**
+ * odp_sig_handler signal handler
+ */
+static
+void odp_sigterm_handler(int signo)
+{
+    if (signo == SIGTERM)
+    {
+        fExit = true;
+        printf("ODP: SIGTERM (%d) signal received\n", signo);
+    }
 }
 
 /**
@@ -1321,6 +1336,11 @@ main(int argc, char *argv[])
 	if (getenv("ODP_IPSEC_USE_POLL_QUEUES")) {
 		queue_create = polled_odp_queue_create;
 		schedule = polled_odp_schedule_cb;
+	}
+
+	if (signal(SIGTERM, odp_sigterm_handler) == SIG_ERR) {
+		EXAMPLE_ERR("Error: ODP can't catch SIGTERM\n");
+		exit(EXIT_FAILURE);
 	}
 
 	/* Init ODP before calling anything else */
