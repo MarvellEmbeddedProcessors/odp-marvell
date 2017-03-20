@@ -50,6 +50,9 @@
 
 #define MAX_WORKERS     32   /**< maximum number of worker threads */
 
+#define USE_APP_PREFETCH
+
+
 /**
  * Parsed command line application arguments
  */
@@ -1079,6 +1082,9 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 		/* Determine new work versus completion or sequence number */
 		if (ODP_EVENT_PACKET == odp_event_type(ev)) {
 			pkt = odp_packet_from_event(ev);
+#ifdef USE_APP_PREFETCH
+			odp_packet_prefetch(pkt, 0, 64);
+#endif /* USE_APP_PREFETCH */
 			if (seqnumq == dispatchq) {
 				ctx = get_pkt_ctx_from_pkt(pkt);
 			} else {
