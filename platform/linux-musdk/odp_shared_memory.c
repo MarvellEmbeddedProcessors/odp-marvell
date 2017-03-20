@@ -60,7 +60,6 @@ typedef struct {
 	uint32_t  flags;
 	uint64_t  page_sz;
 	int       fd;
-	int       musdk_mem;
 } odp_shm_block_t;
 
 typedef struct {
@@ -175,10 +174,7 @@ int odp_shm_free(odp_shm_t shm)
 		return 0;
 	}
 
-	if (block->musdk_mem)
-		mv_sys_dma_mem_free(block->addr_orig);
-	else
-		free(block->addr_orig);
+	mv_sys_dma_mem_free(block->addr_orig);
 
 	memset(block, 0, sizeof(odp_shm_block_t));
 	odp_spinlock_unlock(&odp_shm_tbl->lock);
@@ -228,15 +224,7 @@ odp_shm_t odp_shm_reserve(const char *name, uint64_t size, uint64_t align,
 	strncpy(block->name, name, ODP_SHM_NAME_LEN - 1);
 	block->name[ODP_SHM_NAME_LEN - 1] = 0;
 
-	/* TODO: how can we recognize better the buffers/packets pools??? */
-	if ((strcmp(block->name, "odp_buffer_pools") == 0) ||
-	    (strcmp(block->name, "packet pool") == 0) ||
-	    (strcmp(block->name, "packet_pool") == 0)) {
-		block->addr = mv_sys_dma_mem_alloc(size, align);
-		block->musdk_mem = 1;
-	} else {
-		block->addr = aligned_alloc(align, size);
-	}
+	block->addr = mv_sys_dma_mem_alloc(size, align);
 	if (!block->addr) {
 		odp_spinlock_unlock(&odp_shm_tbl->lock);
 		ODP_ERR("%s: allocation failed!\n", name);
