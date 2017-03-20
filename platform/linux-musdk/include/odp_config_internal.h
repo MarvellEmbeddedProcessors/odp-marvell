@@ -27,7 +27,6 @@ extern "C" {
 /* TODO: temporary set num-RxQs-per-tc according to #cores */
 #define MVPP2_MAX_NUM_QS_PER_TC		4
 #define MVPP2_Q_SIZE			1024
-#define MVPP2_MAX_NUM_BUFFS		4096
 #define MVPP2_DFLT_MTU			1500
 
 #define MVPP2_PKT_PARSE_SUPPORT	1
