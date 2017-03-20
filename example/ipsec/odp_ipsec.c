@@ -108,6 +108,9 @@ static odp_queue_t completionq;
 /** Synchronize threads before packet processing begins */
 static odp_barrier_t sync_barrier;
 
+static uint32_t odp_ipsec_pkt_drop_cnt;
+static uint32_t odp_ipsec_pkt_crypt_drop_cnt;
+
 /**
  * Packet processing states/steps
  */
@@ -236,6 +239,18 @@ static schedule_func_t schedule;
 
 static odp_queue_t poll_queues[MAX_POLL_QUEUES];
 static int num_polled_queues;
+static volatile odp_bool_t fExit;
+
+/**
+ * odp_ipsec_stats_print statistics dump
+ */
+static
+void odp_ipsec_stats_print(void)
+{
+    printf("ODP IPsec statistics: \n");
+    printf("\tESP packets dropped:        %d\n", odp_ipsec_pkt_drop_cnt);
+    printf("\tESP packets crypto dropped: %d\n", odp_ipsec_pkt_crypt_drop_cnt);
+}
 
 /**
  * odp_queue_create wrapper to enable polling versus scheduling
@@ -649,6 +664,7 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 	ipsec_cache_entry_t *entry;
 	odp_crypto_op_params_t params;
 	odp_bool_t posted = 0;
+	int rc;
 
 	/* Default to skip IPsec */
 	*skip = TRUE;
@@ -702,16 +718,35 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 		params.cipher_range.offset = ipv4_data_p(ip) + hdr_len - buf;
 		params.cipher_range.length = ipv4_data_len(ip) - hdr_len;
 		params.override_iv_ptr = esp->iv;
+
+		if (params.cipher_range.offset + params.cipher_range.length >
+			odp_packet_len(params.out_pkt)) {
+			printf("ODP: %s failed: offset %d, size %d, size total %d\n",
+				__func__,
+				params.cipher_range.offset,
+				params.cipher_range.length,
+				odp_packet_len(params.out_pkt));
+			odp_ipsec_pkt_drop_cnt++;
+			return PKT_DROP;
+		}
 	}
 
 	/* Issue crypto request */
 	*skip = FALSE;
 	ctx->state = PKT_STATE_IPSEC_IN_FINISH;
-	if (odp_crypto_operation(&params,
-				 &posted,
-				 result)) {
-		abort();
+
+	rc = odp_crypto_operation(&params, &posted, result);
+	if (rc != 0) {
+		if (rc == 2) {
+			ctx->state = PKT_STATE_IPSEC_IN_CLASSIFY;
+			return PKT_CONTINUE; /* device busy, retry later */
+		}
+		if (rc == -1)
+			fExit = true;
+		odp_ipsec_pkt_crypt_drop_cnt++;
+		return PKT_DROP;
 	}
+
 	return (posted) ? PKT_POSTED : PKT_CONTINUE;
 }
 
@@ -931,8 +966,21 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 
 	/* Set IPv4 length before authentication */
 	ipv4_adjust_len(ip, hdr_len + trl_len);
-	if (!odp_packet_push_tail(pkt, hdr_len + trl_len))
+	if (!odp_packet_push_tail(pkt, hdr_len + trl_len)) {
+		odp_ipsec_pkt_drop_cnt++;
 		return PKT_DROP;
+	}
+
+	if (params.cipher_range.offset + params.cipher_range.length >
+		odp_packet_len(pkt)) {
+		printf("ODP: %s failed: offset %d, size %d, size total %d\n",
+			__func__,
+			params.cipher_range.offset,
+			params.cipher_range.length,
+			odp_packet_len(pkt));
+		odp_ipsec_pkt_drop_cnt++;
+		return PKT_DROP;
+	}
 
 	/* Save remaining context */
 	ctx->ipsec.hdr_len = hdr_len;
@@ -968,6 +1016,7 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 {
 	uint8_t *buf = odp_packet_data(pkt);
 	odp_bool_t posted = 0;
+	int rc;
 
 	/* We were dispatched from atomic queue, assign sequence numbers */
 	if (ctx->ipsec.ah_offset) {
@@ -978,6 +1027,13 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 	}
 	if (ctx->ipsec.esp_offset) {
 		odph_esphdr_t *esp;
+		odph_ipv4hdr_t *ip = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
+
+		/* ESP packet sanity check */
+		if (ip->proto != ODPH_IPPROTO_ESP) {
+			odp_ipsec_pkt_drop_cnt++;
+			return PKT_DROP;
+		}
 
 		esp = (odph_esphdr_t *)(ctx->ipsec.esp_offset + buf);
 		esp->seq_no = odp_cpu_to_be_32((*ctx->ipsec.esp_seq)++);
@@ -999,11 +1055,18 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 	}
 
 	/* Issue crypto request */
-	if (odp_crypto_operation(&ctx->ipsec.params,
-				 &posted,
-				 result)) {
-		abort();
+	rc = odp_crypto_operation(&ctx->ipsec.params, &posted, result);
+	if (rc != 0) {
+		if (rc == 2) {
+			ctx->state = PKT_STATE_IPSEC_OUT_SEQ;
+			return PKT_CONTINUE; /* device busy, retry later */
+		}
+		if (rc == -1)
+			fExit = true;
+		odp_ipsec_pkt_crypt_drop_cnt++;
+		return PKT_DROP;
 	}
+
 	return (posted) ? PKT_POSTED : PKT_CONTINUE;
 }
 
@@ -1024,11 +1087,16 @@ pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
 
 	/* Check crypto result */
 	if (!result->ok) {
-		if (!is_crypto_compl_status_ok(&result->cipher_status))
+		if (!is_crypto_compl_status_ok(&result->cipher_status)) {
+			odp_ipsec_pkt_drop_cnt++;
 			return PKT_DROP;
-		if (!is_crypto_compl_status_ok(&result->auth_status))
+		}
+		if (!is_crypto_compl_status_ok(&result->auth_status)) {
+			odp_ipsec_pkt_drop_cnt++;
 			return PKT_DROP;
+		}
 	}
+
 	ip = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
 
 	/* Finalize the IPv4 header */
@@ -1080,8 +1148,17 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 		odp_queue_t  dispatchq;
 		odp_crypto_op_result_t result;
 
+		if (fExit) {
+		    printf("ODP: exit pktio thread %d\n", thr);
+		    break;
+		}
+
 		/* Use schedule to get event from any input queue */
 		ev = schedule(&dispatchq);
+
+		if (ODP_EVENT_INVALID == ev) {
+			continue;
+		}
 
 		/* Determine new work versus completion or sequence number */
 		if (ODP_EVENT_PACKET == odp_event_type(ev)) {
@@ -1206,8 +1283,10 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 
 		/* Print packet counts every once in a while */
 		if (PKT_DONE == rc) {
-			if (odp_unlikely(pkt_cnt++ % 1000 == 0)) {
+			if (odp_unlikely(pkt_cnt++ % 500000 == 0)) {
 				printf("  [%02i] pkt_cnt:%lu\n", thr, pkt_cnt);
+				if (odp_ipsec_pkt_drop_cnt || odp_ipsec_pkt_crypt_drop_cnt)
+					odp_ipsec_stats_print();
 				fflush(NULL);
 			}
 		}
@@ -1361,6 +1440,8 @@ main(int argc, char *argv[])
 	if (stream_count) {
 		odp_bool_t done;
 		do {
+			if (fExit)
+				break;
 			done = verify_stream_db_outputs();
 			sleep(1);
 		} while (!done);
@@ -1371,6 +1452,9 @@ main(int argc, char *argv[])
 
 	free(args->appl.if_names);
 	free(args->appl.if_str);
+
+	odp_ipsec_stats_print();
+
 	printf("Exit\n\n");
 
 	return 0;
