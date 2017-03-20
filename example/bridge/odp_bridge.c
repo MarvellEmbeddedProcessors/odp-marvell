@@ -146,7 +146,7 @@ typedef struct {
 		int next_rx_queue;
 		int next_tx_queue;
 	} pktios[MAX_PKTIOS];
-	
+
 } args_t;
 
 /** Global pointer to args */
@@ -708,7 +708,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts =  "+c:+t:+a:i:e:E:h";
+	static const char *shortopts =  "+c:+t:+a:i:e:Eh";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
 	odph_parse_options(argc, argv, shortopts, longopts);
