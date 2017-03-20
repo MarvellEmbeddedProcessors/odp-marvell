@@ -789,7 +789,9 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 	ip->tos = ctx->ipsec.ip_tos;
 	ip->frag_offset = odp_cpu_to_be_16(ctx->ipsec.ip_frag_offset);
 	ip->chksum = 0;
+#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
 	odph_ipv4_csum_update(pkt);
+#endif /* !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) ... */
 
 	/* Correct the packet length and move payload into position */
 	memmove(ipv4_data_p(ip),
@@ -1034,7 +1036,9 @@ pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
 	ip->tos = ctx->ipsec.ip_tos;
 	ip->frag_offset = odp_cpu_to_be_16(ctx->ipsec.ip_frag_offset);
 	ip->chksum = 0;
+#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
 	odph_ipv4_csum_update(pkt);
+#endif /* !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) ... */
 
 	/* Fall through to next state */
 	return PKT_CONTINUE;
