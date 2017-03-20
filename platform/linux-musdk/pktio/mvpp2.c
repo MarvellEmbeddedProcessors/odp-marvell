@@ -337,7 +337,6 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	snprintf(name, sizeof(name), "pool-%d:%d", port_desc.pp_id, pool_id);
 	memset(&bpool_params, 0, sizeof(bpool_params));
 	bpool_params.match = name;
-	bpool_params.max_num_buffs = MVPP2_MAX_NUM_BUFFS;
 	/* TODO: is this correct? */
 	bpool_params.buff_len = pktio_entry->s.pkt_mvpp2.mtu;
 	NEXT_POWER_OF_2(bpool_params.buff_len, bpool_params.buff_len);
