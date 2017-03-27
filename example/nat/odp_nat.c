@@ -60,7 +60,7 @@
 /** Maximum number of pktio interfaces */
 #define MAX_PKTIOS             4
 
-#define NAT_TBL_SIZE           (512 * 1024)
+#define NAT_TBL_SIZE           (64 * 1024)
 #define NAT_TBL_DEPTH          4
 
 #define IP_MAP_TBL_SIZE        128
@@ -76,8 +76,6 @@
 
 #define VID_MASK               	0xFFF
 #define DEV_ID_MASK            	0x1F
-
-#define NAT_AGING_ENABLE       	1
 
 #define MAX_STRING  			32
 
@@ -167,7 +165,6 @@ typedef struct nat_entry_t {
 	uint32_t     	target_ip; 	/* For SNAT, it is source ip, for DNAT, it is dest ip */
 	struct nat_entry_t *reverse_nat_entry;
 	uint32_t     	valid;
-	odp_time_t		timestamp;
 } nat_entry_t;
 
 /**
@@ -518,7 +515,6 @@ static nat_entry_t* dnat_tbl_add_entry(ipv4_5tuple_t* ipv4_5tuple, uint32_t targ
 		if (entry->valid) {
 			odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 			if (0 == memcmp(ipv4_5tuple, &entry->ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
-				entry->timestamp = odp_time_global();
 				return entry;
 			}
 		} else {
@@ -527,7 +523,6 @@ static nat_entry_t* dnat_tbl_add_entry(ipv4_5tuple_t* ipv4_5tuple, uint32_t targ
 			entry->target_ip = target_ip;
 			entry->target_port = port;
 			entry->reverse_nat_entry = snat_ptr;
-			entry->timestamp = odp_time_global();
 			odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 			return entry;
 		}
@@ -910,8 +905,6 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 						odph_ipv4_csum_update(pkt);
 #endif
 					}
-					tbl[hash_index][j].timestamp = odp_time_global();
-					tbl[hash_index][j].reverse_nat_entry->timestamp = odp_time_global();
 					break;
 				}
 			} else {
@@ -931,7 +924,6 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				// 2. Add into SNAT table
 				tbl[hash_index][j].valid = 1;
 				tbl[hash_index][j].ipv4_5tuple = snat_ipv4;
-				tbl[hash_index][j].timestamp = odp_time_global();
 				// Modify the local source port to public source port
 				port_pool = ip_table_lookup_pool(snat_ipv4.src_ip);
 				switch (snat_ipv4.protocol) {
@@ -1068,8 +1060,6 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 						printf("Found in dnat table: %08x %d %08x %d %d %08x -> %d %d\n", ipv4.src_ip, ipv4.src_port, ipv4.dst_ip, ipv4.dst_port, ipv4.protocol, tbl[hash_index][j].target_ip, hash_index, j);
 					target_ip = tbl[hash_index][j].target_ip;
 					target_port = tbl[hash_index][j].target_port;
-					tbl[hash_index][j].timestamp = odp_time_global();
-					tbl[hash_index][j].reverse_nat_entry->timestamp = odp_time_global();
 					break;
 				}
 			} else
@@ -1444,141 +1434,6 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	gbl_args->pktios[idx].pktio        = pktio;
 
 	return 0;
-}
-
-static void print_nat_table(nat_entry_t nat_tbl[][NAT_TBL_DEPTH], unsigned int tbl_size, unsigned int tbl_depth, odp_rwlock_t *nat_lock, const char *msg)
-{
-	unsigned int i, j, num_entries = 0;
-	unsigned int ip;
-
-	printf("%s\n", msg);
-	printf("Hash   Dep  Src IP       PRT   Dest IP      PRT   Prtcl  Target IP    PRT   TimeStamp   \n");
-	printf("----------------------------------------------------------------------------------------\n");
-	for(i=0; i<tbl_size; i++)
-	{
-		for(j=0; j<tbl_depth; j++)
-		{
-			if(nat_tbl[i][j].valid)
-			{
-				odp_rwlock_write_lock(nat_lock);
-				printf("%05X  %3X  ", i, j);
-				ip = nat_tbl[i][j].ipv4_5tuple.src_ip;
-				printf("%02X.%02X.%02X.%02X  ", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff, (ip >> 0) & 0xff);
-				printf("%04X  ", nat_tbl[i][j].ipv4_5tuple.src_port);
-				ip = nat_tbl[i][j].ipv4_5tuple.dst_ip;
-				printf("%02X.%02X.%02X.%02X  ", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff, (ip >> 0) & 0xff);
-				printf("%04X  ", nat_tbl[i][j].ipv4_5tuple.dst_port);
-				printf("%02X     ", nat_tbl[i][j].ipv4_5tuple.protocol);
-				ip = nat_tbl[i][j].target_ip;
-				printf("%02X.%02X.%02X.%02X  ", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff, (ip >> 0) & 0xff);
-				printf("%04X  ", nat_tbl[i][j].target_port);
-				printf("%ld\n", nat_tbl[i][j].timestamp.tv_sec);
-				num_entries ++;
-				odp_rwlock_write_unlock(nat_lock);
-			}
-		}
-	}
-	printf("----------------------------------------------------------------------------------------\n");
-	printf("number of entries: %d\n\n", num_entries);
-	return;
-}
-
-static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
-	     int duration, int timeout, int aging_enable)
-{
-	uint64_t pkts = 0;
-	uint64_t pkts_prev = 0;
-	uint64_t pps;
-	uint64_t rx_drops, tx_drops;
-	uint64_t maximum_pps = 0;
-	int i, j;
-	int elapsed = 0;
-	int stats_enabled = 1;
-	int loop_forever = (duration == 0);
-	odp_time_t cur_timestamp;
-	int aging_enabled = 1;
-	int dump_nat_tables = 1;
-	int dump_interval = 15;
-
-	if(dump_interval <= 0 )
-		dump_interval = 1;
-
-	if (timeout <= 0) {
-		stats_enabled = 0;
-		dump_nat_tables = 0;
-		timeout = 1;
-	}
-
-	odp_time_init_global();
-
-	/* Wait for all threads to be ready*/
-	odp_barrier_wait(&barrier);
-
-	do {
-		sleep(timeout);
-
-		if(aging_enable)
-		{
-			cur_timestamp = odp_time_global();
-			for(i=0; i<NAT_TBL_SIZE; i++)
-			{
-				for(j=0; j<NAT_TBL_DEPTH; j++)
-				{
-					odp_rwlock_write_lock(&gbl_args->snat_lock);
-					if(gbl_args->snat_tbl[i][j].valid)
-					{
-						if((uint32_t)(cur_timestamp.tv_sec - gbl_args->snat_tbl[i][j].timestamp.tv_sec) >=
-								gbl_args->appl.aging_time)
-						{
-							printf("Deleted Snat entry with hash: %d, depth: %d\n", i, j);
-							gbl_args->snat_tbl[i][j].valid = 0;
-							gbl_args->snat_tbl[i][j].reverse_nat_entry->valid = 0;
-							memset(&gbl_args->snat_tbl[i][j].reverse_nat_entry,0,sizeof(nat_entry_t));
-							memset(&gbl_args->snat_tbl[i][j],0,sizeof(nat_entry_t));
-						}
-					}
-					odp_rwlock_write_unlock(&gbl_args->snat_lock);
-				}
-			}
-		}
-
-		if(dump_nat_tables && (elapsed % dump_interval == 0))
-		{
-			print_nat_table(gbl_args->snat_tbl, NAT_TBL_SIZE, NAT_TBL_DEPTH, &gbl_args->snat_lock, "SNAT Table Dump");
-			print_nat_table(gbl_args->dnat_tbl, NAT_TBL_SIZE, NAT_TBL_DEPTH, &gbl_args->dnat_lock, "DNAT Table Dump");
-		}
-
-		if (stats_enabled) {
-			pkts = 0;
-			rx_drops = 0;
-			tx_drops = 0;
-
-			for (i = 0; i < num_workers; i++) {
-				pkts += thr_stats[i].s.packets;
-				rx_drops += thr_stats[i].s.rx_drops;
-				tx_drops += thr_stats[i].s.tx_drops;
-			}
-
-			pps = (pkts - pkts_prev) / timeout;
-			if (pps > maximum_pps)
-				maximum_pps = pps;
-			printf("%" PRIu64 " pps, %" PRIu64 " max pps, ",  pps,
-			       maximum_pps);
-
-			printf(" %" PRIu64 " rx drops, %" PRIu64 " tx drops\n",
-			       rx_drops, tx_drops);
-
-			pkts_prev = pkts;
-		}
-
-		elapsed += timeout;
-	} while (loop_forever || (elapsed < duration));
-
-	if (stats_enabled)
-		printf("TEST RESULT: %" PRIu64 " maximum packets per second.\n",
-		       maximum_pps);
-
-	return pkts > 100 ? 0 : -1;
 }
 
 /**
@@ -2303,8 +2158,8 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	ret = nat_aging_and_stats(num_workers, stats, gbl_args->appl.time,
-			gbl_args->appl.accuracy, NAT_AGING_ENABLE);
+	ret = print_speed_stats(num_workers, stats, gbl_args->appl.time,
+				gbl_args->appl.accuracy);
 
 	exit_threads = 1;
 
