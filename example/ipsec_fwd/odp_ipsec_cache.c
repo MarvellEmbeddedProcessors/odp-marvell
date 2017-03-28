@@ -84,7 +84,7 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 	params.cipher_alg = ODP_CIPHER_ALG_NULL;
 	params.iv.data = NULL;
 	params.iv.length = 0;
-    if (cipher_sa) {
+	if (cipher_sa) {
 		params.cipher_alg  = cipher_sa->alg.u.cipher;
 		params.cipher_key.data  = cipher_sa->key.data;
 		params.cipher_key.length  = cipher_sa->key.length;
@@ -93,17 +93,15 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 		params.auth_alg = cipher_sa->alg.u.auth;
 		params.auth_key.data = cipher_sa->auth_key.data;
 		params.auth_key.length = cipher_sa->auth_key.length;
-        mode = cipher_sa->mode;
+		mode = cipher_sa->mode;
 	}
 
 	/* Auth */
-	if (auth_sa) {
+	if (auth_sa && (params.auth_alg == ODP_AUTH_ALG_NULL)) {
 		params.auth_alg = auth_sa->alg.u.auth;
 		params.auth_key.data = auth_sa->key.data;
 		params.auth_key.length = auth_sa->key.length;
 		mode = auth_sa->mode;
-	} else {
-		params.auth_alg = ODP_AUTH_ALG_NULL;
 	}
 
 	/* Generate an IV */

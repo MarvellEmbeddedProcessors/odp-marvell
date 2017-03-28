@@ -757,7 +757,7 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 	ctx->ipsec.trl_len = 0;
 	ctx->ipsec.src_ip = entry->src_ip;
 	ctx->ipsec.dst_ip = entry->dst_ip;
-    ctx->ipsec.auth_alg = entry->esp.auth_alg;
+	ctx->ipsec.auth_alg = entry->esp.auth_alg;
 
 
 	/*If authenticating, zero the mutable fields build the request */
@@ -835,7 +835,7 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 	}
 
 	if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_96) {
-		icv_len = ODP_AUTH_ALG_MD5_96_ICV_LEN; /* 12 ICV bytes */
+		icv_len = ODP_AUTH_ALG_MD5_96_ICV_LEN; /* 12 ICV bytes  */
 	}
 
     /*
@@ -844,7 +844,7 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
      * NOTE: ESP authentication ICV not supported
      */
 	if (ctx->ipsec.esp_offset) {
-		uint8_t *eop = (uint8_t *)(ip) + odp_be_to_cpu_16(ip->tot_len);
+		uint8_t *eop = (uint8_t *)(ip) + odp_be_to_cpu_16(ip->tot_len) - icv_len;
 		odph_esptrl_t *esp_t = (odph_esptrl_t *)(eop) - 1;
 
 		ip->proto = esp_t->next_header;
@@ -926,6 +926,8 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 	int trl_len = 0;
 	odph_ahhdr_t *ah = NULL;
 	odph_esphdr_t *esp = NULL;
+	int icv_len = 0;
+
 
 	/* Default to skip IPsec */
 	*skip = TRUE;
@@ -1001,7 +1003,7 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 		trl_len = encrypt_len - ip_data_len;
 
 		if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_96) {
-			trl_len += ODP_AUTH_ALG_MD5_96_ICV_LEN;
+			icv_len = ODP_AUTH_ALG_MD5_96_ICV_LEN;
 		}
 
 		esp->spi = odp_cpu_to_be_32(entry->esp.spi);
@@ -1042,12 +1044,12 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 	}
 
 	/* Set IPv4 length before authentication */
-	ipv4_adjust_len(ip, hdr_len + trl_len);
+	ipv4_adjust_len(ip, hdr_len + trl_len + icv_len);
 
 #ifdef MEMMOVE_OPTIMIZED
-	if (!odp_packet_push_tail(pkt, trl_len)) {
+	if (!odp_packet_push_tail(pkt, trl_len + icv_len)) {
 #else
-	if (!odp_packet_push_tail(pkt, hdr_len + trl_len)) {
+	if (!odp_packet_push_tail(pkt, hdr_len + trl_len + icv_len)) {
 #endif
 		dprintf("out_classify %s odp_packet_push_tail failed PKT_DROP\n", __func__ );
 		return PKT_DROP;
