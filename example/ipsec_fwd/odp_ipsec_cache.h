@@ -43,6 +43,9 @@ typedef struct ipsec_cache_entry_s {
 		uint32_t             block_len;   /**< Cipher block length */
 		uint32_t             iv_len;      /**< Cipher IV length */
 		ipsec_key_t          key;         /**< Cipher key */
+		odp_auth_alg_t       auth_alg;    /**< Auth algorithm */
+		uint32_t             icv_len;     /**< Auth ICV length */
+		ipsec_key_t          auth_key;    /**< Auth key */
 	} esp;
 	struct {
 		odp_auth_alg_t       alg;         /**< Auth algorithm */

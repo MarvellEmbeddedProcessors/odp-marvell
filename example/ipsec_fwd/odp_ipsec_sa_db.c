@@ -104,7 +104,15 @@ int create_sa_db_entry(char *input, odp_bool_t cipher)
 						ODP_CIPHER_ALG_3DES_CBC;
 					entry->block_len  = 8;
 					entry->iv_len	  = 8;
-				} else if (0 == strcmp(token, "aes")) {
+				}
+				else if (0 == strcmp(token, "aes128-md5")) {
+					entry->alg.u.cipher = ODP_CIPHER_ALG_AES128_CBC;
+					entry->block_len  = 16;
+					entry->iv_len     = 16;
+					entry->alg.u.auth = ODP_AUTH_ALG_MD5_96;
+					entry->icv_len    = 12;
+				}
+				else if (0 == strcmp(token, "aes128")) {
 					entry->alg.u.cipher = ODP_CIPHER_ALG_AES128_CBC;
 					entry->block_len  = 16;
 					entry->iv_len     = 16;
@@ -134,6 +142,13 @@ int create_sa_db_entry(char *input, odp_bool_t cipher)
 					 &entry->key,
 					 &entry->alg);
 			break;
+		case 5:
+			entry->alg.cipher = FALSE;
+			parse_key_string(token,
+					 &entry->auth_key,
+					 &entry->alg);
+			entry->alg.cipher = TRUE;
+			break;
 		default:
 			printf("ERROR: extra token \"%s\" at position %d\n",
 			       token, pos);
@@ -145,7 +160,7 @@ int create_sa_db_entry(char *input, odp_bool_t cipher)
 	}
 
 	/* Verify we parsed exactly the number of tokens we expected */
-	if (5 != pos) {
+	if ((6 != pos) && (5 != pos)) {
 		printf("ERROR: \"%s\" contains %d tokens, expected 5\n",
 		       input,
 		       pos);
