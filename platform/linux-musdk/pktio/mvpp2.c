@@ -214,16 +214,18 @@ static int mvpp2_init_global(void)
 	pp2_params.bm_pool_reserved_map = MVPP2_BPOOL_RSRV;
 	pp2_params.ppios[0][0].is_enabled = 1;
 	pp2_params.ppios[0][0].first_inq = 0;
-	pp2_params.ppios[0][1].is_enabled = 1;
+	pp2_params.ppios[0][1].is_enabled = 0;
 	pp2_params.ppios[0][1].first_inq = 0;
-	pp2_params.ppios[0][2].is_enabled = 1;
-	pp2_params.ppios[0][2].first_inq = 0;
+	if (num_inst == 1) {
+		pp2_params.ppios[0][2].is_enabled = 1;
+		pp2_params.ppios[0][2].first_inq = 0;
+	}
 	if (num_inst == 2) {
 		pp2_params.ppios[1][0].is_enabled = 1;
 		pp2_params.ppios[1][0].first_inq = 0;
 		pp2_params.ppios[1][1].is_enabled = 1;
 		pp2_params.ppios[1][1].first_inq = 0;
-		pp2_params.ppios[1][2].is_enabled = 1;
+		pp2_params.ppios[1][2].is_enabled = 0;
 		pp2_params.ppios[1][2].first_inq = 0;
 	}
 	err = pp2_init(&pp2_params);
