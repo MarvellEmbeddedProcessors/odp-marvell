@@ -26,6 +26,10 @@
 #include <drivers/mv_pp2_bpool.h>
 #include <drivers/mv_pp2_ppio.h>
 
+
+#define USE_LPBK_SW_RECYLCE
+
+
 /*#define USE_HW_BUFF_RECYLCE*/
 #define MAX_NUM_QS_PER_CORE		MVPP2_MAX_NUM_TCS_PER_PORT
 #define MAX_NUM_PACKPROCS		1
@@ -155,11 +159,20 @@ static int fill_bpool(odp_pool_t	 pool,
 		      int		 num,
 		      int		 alloc_len)
 {
+	int			 i, err = 0;
+#ifndef USE_LPBK_SW_RECYLCE
 	odp_packet_t		 pkt;
-	struct pp2_buff_inf	 buff_inf;
-	int			 i, err;
 	static int		 first = 1;
+	struct pp2_buff_inf	 buff_inf;
+#else
+	odp_packet_t		 *pkt;
+	struct buff_release_entry buff_array[MVPP2_Q_SIZE];
+	int j = 0, err2 = 0;
+	u16 final_num, num_bufs;
+#endif
 
+
+#ifndef USE_LPBK_SW_RECYLCE
 	for (i = 0; i < num; i++) {
 		if (packet_alloc_multi(pool, alloc_len, &pkt, 1) != 1)
 			return -1;
@@ -195,6 +208,59 @@ static int fill_bpool(odp_pool_t	 pool,
 		if (err != 0)
 			return err;
 	}
+#else
+	pkt = malloc(num * sizeof(odp_packet_t));
+
+	if ((final_num = packet_alloc_multi(pool, alloc_len, pkt, num)) != num)
+		err = -1;
+	i = 0;
+	while((i < final_num) && (!pkt[i] || pkt[i] == ODP_PACKET_INVALID)) {
+		ODP_ERR("Allocated invalid pkt, pkt_num %d out of %d; skipping!\n", i, final_num);
+		i++;
+	}
+	if (unlikely(i == final_num)) {
+		err = -1;
+		goto err;
+	}
+
+	odp_ticketlock_lock(&thrs_lock);
+	if (sys_dma_high_addr == (uint64_t)(~0LL)) {
+		sys_dma_high_addr = ((u64)pkt[i]) & (~((1ULL << 32) - 1));
+		ODP_DBG("sys_dma_high_addr (0x%lx)\n", sys_dma_high_addr);
+	}
+	odp_ticketlock_unlock(&thrs_lock);
+
+	for (; i < final_num; i++) {
+		if (!pkt[i] || (pkt[i] == ODP_PACKET_INVALID)) {
+			ODP_ERR("Allocated invalid pkt; skipping!\n");
+			continue;
+		}
+
+		if ((upper_32_bits((u64)pkt[i])) != (sys_dma_high_addr >> 32)) {
+			ODP_ERR("pkt(%p)  upper out of range; skipping\n", pkt[i]);
+			continue;
+		}
+
+		if (!odp_packet_head(pkt[i])) {
+			ODP_ERR("Allocated invalid pkt (no buffer)!\n");
+			continue;
+		}
+		buff_array[j].bpool = bpool;
+		buff_array[j].buff.cookie =
+			lower_32_bits((u64)(uintptr_t)pkt[i]); /* cookie contains lower_32_bits of the va */
+		buff_array[j].buff.addr =
+			(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(odp_packet_head(pkt[i]));
+		j++;
+	}
+	num_bufs = j;
+	err2 = pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
+err:
+	free(pkt);
+	if (err2)
+		return(err2);
+	return(err);
+
+#endif
 
 	return 0;
 }
@@ -699,6 +765,11 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 #endif /* !USE_HW_BUFF_RECYLCE */
 	u8			 tc;
 	int			 err;
+#ifdef USE_LPBK_SW_RECYLCE
+	u16 buf_index = 0, num_bufs = 0;
+	struct buff_release_entry buff_array[MVPP2_Q_SIZE];
+#endif
+
 
 	/* TODO: only support now RSS; no support for QoS; how to translate txq_id to tc/hif???? */
 	tc = 0;
@@ -780,7 +851,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 
 #ifndef USE_HW_BUFF_RECYLCE
 	pp2_ppio_get_num_outq_done(pktio_entry->s.pkt_mvpp2.ppio, hif, tc, &num_conf);
-
+#ifndef USE_LPBK_SW_RECYLCE
 	for (i = 0; i < num_conf; i++) {
 		struct pp2_buff_inf	*binf;
 
@@ -801,6 +872,38 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 			odp_packet_free_multi(&pkt, 1);
 		}
 	}
+#else
+	for (i = 0; i < num_conf; i++) {
+		struct pp2_buff_inf	*binf;
+		binf = &shadow_q->buffs_inf[shadow_q->read_ind];
+		if (unlikely(!binf->cookie || !binf->addr)) {
+			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
+				shadow_q->read_ind, (u64)binf->cookie, (u64)binf->addr);
+			goto skip_buf;
+		}
+		pkt_hdr = odp_packet_hdr((odp_packet_t)((uintptr_t)binf->cookie | sys_dma_high_addr));
+		if (unlikely(!(pkt_hdr->input))) {
+			pkt = (odp_packet_t)((uintptr_t)binf->cookie | sys_dma_high_addr);
+			odp_packet_free_multi(&pkt, 1);
+			goto skip_buf;
+		}
+
+		memcpy(&buff_array[buf_index].buff, binf, sizeof(*binf));
+		buff_array[buf_index].bpool= get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool;
+		buf_index++;
+		num_bufs++;
+skip_buf:
+		shadow_q->read_ind++;
+		if (shadow_q->read_ind == MVPP2_Q_SIZE) {
+			shadow_q->read_ind = 0;
+			pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
+			num_bufs = 0;
+			buf_index = 0;
+		}
+	}
+	pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
+
+#endif /* USE_LPBK_SW_RECYLCE */
 #endif /* !USE_HW_BUFF_RECYLCE */
 
 	return num;
