@@ -80,17 +80,20 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 
 
 	/* Cipher */
-	if (cipher_sa) {
+	params.auth_alg = ODP_AUTH_ALG_NULL;
+	params.cipher_alg = ODP_CIPHER_ALG_NULL;
+	params.iv.data = NULL;
+	params.iv.length = 0;
+    if (cipher_sa) {
 		params.cipher_alg  = cipher_sa->alg.u.cipher;
 		params.cipher_key.data  = cipher_sa->key.data;
 		params.cipher_key.length  = cipher_sa->key.length;
 		params.iv.data = entry->state.iv;
 		params.iv.length = cipher_sa->iv_len;
-		mode = cipher_sa->mode;
-	} else {
-		params.cipher_alg = ODP_CIPHER_ALG_NULL;
-		params.iv.data = NULL;
-		params.iv.length = 0;
+		params.auth_alg = cipher_sa->alg.u.auth;
+		params.auth_key.data = cipher_sa->auth_key.data;
+		params.auth_key.length = cipher_sa->auth_key.length;
+        mode = cipher_sa->mode;
 	}
 
 	/* Auth */
@@ -127,6 +130,10 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 		entry->esp.block_len = cipher_sa->block_len;
 		entry->esp.iv_len = cipher_sa->iv_len;
 		memcpy(&entry->esp.key, &cipher_sa->key, sizeof(ipsec_key_t));
+
+		entry->esp.auth_alg = cipher_sa->alg.u.auth;
+		entry->esp.icv_len = cipher_sa->icv_len;
+		memcpy(&entry->esp.auth_key, &cipher_sa->auth_key, sizeof(ipsec_key_t));
 	}
 	if (auth_sa) {
 		entry->src_ip = auth_sa->src_ip;

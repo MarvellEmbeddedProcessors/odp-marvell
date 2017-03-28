@@ -99,11 +99,12 @@
 
 #define EMPTY_RX_THRESHOULD 100
 
+#define ODP_AUTH_ALG_MD5_96_ICV_LEN 12
 
 //#define CHECK_CYCLES
 #ifdef CHECK_CYCLES
 #include <sys/time.h>   // for gettimeofday()
-#define CLK_MHZ	1300
+#define CLK_MHZ	2000
 static signed int long long usecs1=0, cnt1=0;
 static struct timeval t1, t2;
 
@@ -188,6 +189,7 @@ typedef struct {
 				      buffer start */
 	uint16_t ah_offset;      /**< Offset of AH header from buffer start */
 	uint16_t esp_offset;     /**< Offset of ESP header from buffer start */
+    odp_auth_alg_t auth_alg; /**< Authentication algorithm */
 
 	/* Input only */
 	uint32_t src_ip;         /**< SA source IP address */
@@ -755,6 +757,8 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 	ctx->ipsec.trl_len = 0;
 	ctx->ipsec.src_ip = entry->src_ip;
 	ctx->ipsec.dst_ip = entry->dst_ip;
+    ctx->ipsec.auth_alg = entry->esp.auth_alg;
+
 
 	/*If authenticating, zero the mutable fields build the request */
 	if (ah) {
@@ -808,6 +812,7 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 	odph_ipv4hdr_t *ip;
 	int hdr_len = ctx->ipsec.hdr_len;
 	int trl_len = 0;
+	int icv_len = 0;
 
 	/* Check crypto result */
 	if (!result->ok) {
@@ -829,17 +834,21 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 		ip->proto = ah->next_header;
 	}
 
-	/*
-	 * Finish cipher by finding ESP trailer and processing
-	 *
-	 * NOTE: ESP authentication ICV not supported
-	 */
+	if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_96) {
+		icv_len = ODP_AUTH_ALG_MD5_96_ICV_LEN; /* 12 ICV bytes */
+	}
+
+    /*
+     * Finish cipher by finding ESP trailer and processing
+     *
+     * NOTE: ESP authentication ICV not supported
+     */
 	if (ctx->ipsec.esp_offset) {
 		uint8_t *eop = (uint8_t *)(ip) + odp_be_to_cpu_16(ip->tot_len);
 		odph_esptrl_t *esp_t = (odph_esptrl_t *)(eop) - 1;
 
 		ip->proto = esp_t->next_header;
-		trl_len += esp_t->pad_len + sizeof(*esp_t);
+		trl_len += esp_t->pad_len + sizeof(*esp_t) + icv_len;
 	}
 
 	/* We have a tunneled IPv4 packet */
@@ -957,6 +966,7 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 		esp = (odph_esphdr_t *)(ip_data + hdr_len);
 		hdr_len += sizeof(odph_esphdr_t);
 		hdr_len += entry->esp.iv_len;
+		ctx->ipsec.auth_alg = entry->esp.auth_alg;
 	}
 
 #ifdef MEMMOVE_OPTIMIZED
@@ -989,6 +999,10 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 					     sizeof(*esp_t),
 					     entry->esp.block_len);
 		trl_len = encrypt_len - ip_data_len;
+
+		if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_96) {
+			trl_len += ODP_AUTH_ALG_MD5_96_ICV_LEN;
+		}
 
 		esp->spi = odp_cpu_to_be_32(entry->esp.spi);
 		memcpy(esp + 1, entry->state.iv, entry->esp.iv_len);
@@ -1600,7 +1614,7 @@ static void usage(char *progname)
 	       "Routing / IPSec OPTIONS:\n"
 	       " -r, --route SubNet:Intf:NextHopMAC\n"
 	       " -p, --policy SrcSubNet:DstSubNet:(in|out):(ah|esp|both)\n"
-	       " -e, --esp SrcIP:DstIP:alg(3des|aes|null):SPI:Key(192|128)\n"
+	       " -e, --esp SrcIP:DstIP:alg(3des|aes128|aes128-md5|null):SPI:Key(192|128)\n"
 	       " -a, --ah SrcIP:DstIP:(sha256|md5|null):SPI:Key(256|128)\n"
 	       "\n"
 	       "  Where: NextHopMAC is raw hex/dot notation, i.e. 03.BA.44.9A.CE.02\n"

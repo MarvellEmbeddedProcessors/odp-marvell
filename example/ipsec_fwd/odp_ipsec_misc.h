@@ -61,7 +61,7 @@ typedef struct {
  */
 typedef struct {
 	odp_bool_t cipher;
-	union {
+	struct {
 		odp_cipher_alg_t cipher;
 		odp_auth_alg_t   auth;
 	} u;
