@@ -28,7 +28,13 @@
 
 #ifdef ODP_PKTIO_MVSAM
 #include <drivers/mv_sam.h>
+#include <lib/mv_md5.h>
+#include <lib/mv_sha2.h>
+#include <lib/mv_sha1.h>
+#include <drivers/mv_pp2.h>
 
+#define MAX_AUTH_BLOCK_SIZE   128 /* Bytes */
+#define AUTH_BLOCK_SIZE_64B	  64  /* Bytes */
 #endif /* ODP_PKTIO_MVSAM */
 
 #define MAX_SESSIONS 32
@@ -189,6 +195,105 @@ static int find_free_cio(int cio_local_idx)
 	return i;
 }
 
+static int hmac_create_iv(enum sam_auth_alg auth_alg, unsigned char key[], int key_len,
+			   unsigned char inner[], unsigned char outer[])
+{
+	unsigned char   in[MAX_AUTH_BLOCK_SIZE];
+	unsigned char   out[MAX_AUTH_BLOCK_SIZE];
+	int             i, max_key_len, rc = 0;
+
+	max_key_len = AUTH_BLOCK_SIZE_64B;
+	if (auth_alg == SAM_AUTH_HMAC_SHA2_384)
+		max_key_len = SHA384_BLOCK_LENGTH;
+	else if (auth_alg == SAM_AUTH_HMAC_SHA2_512)
+		max_key_len = SHA512_BLOCK_LENGTH;
+
+	for (i = 0 ; i < key_len ; i++) {
+		in[i] = 0x36 ^ key[i];
+		out[i] = 0x5c ^ key[i];
+	}
+	for (i = key_len ; i < max_key_len ; i++) {
+		in[i] = 0x36;
+		out[i] = 0x5c;
+	}
+
+	if (auth_alg == SAM_AUTH_HMAC_MD5) {
+		MV_MD5_CONTEXT ctx;
+
+		memset(&ctx, 0, sizeof(ctx));
+		mv_md5_init(&ctx);
+		mv_md5_update(&ctx, in, max_key_len);
+		mv_md5_digest(inner, &ctx);
+
+		memset(&ctx, 0, sizeof(ctx));
+		mv_md5_init(&ctx);
+		mv_md5_update(&ctx, out, max_key_len);
+		mv_md5_digest(outer, &ctx);
+
+	} else if (auth_alg == SAM_AUTH_HMAC_SHA1) {
+		MV_SHA1_CTX ctx;
+
+		memset(&ctx, 0, sizeof(ctx));
+		mv_sha1_init(&ctx);
+		mv_sha1_update(&ctx, in, max_key_len);
+		for (i = 0; i < MV_SHA1_DIGEST_SIZE; i++) {
+			inner[i] = (unsigned char)
+				((ctx.state[i >> 2] >> ((3 - (i & 3)) * 8)) & 255);
+		}
+
+		memset(&ctx, 0, sizeof(ctx));
+		mv_sha1_init(&ctx);
+		mv_sha1_update(&ctx, out, max_key_len);
+		for (i = 0; i < MV_SHA1_DIGEST_SIZE; i++) {
+			outer[i] = (unsigned char)
+				((ctx.state[i >> 2] >> ((3 - (i & 3)) * 8)) & 255);
+	}
+
+	} else if (auth_alg == SAM_AUTH_HMAC_SHA2_256) {
+		SHA256_CTX ctx;
+
+		memset(&ctx, 0, sizeof(ctx));
+		mv_sha256_init(&ctx);
+		mv_sha256_update(&ctx, in, max_key_len);
+		mv_sha256_result_copy(&ctx, inner);
+
+		memset(&ctx, 0, sizeof(ctx));
+		mv_sha256_init(&ctx);
+		mv_sha256_update(&ctx, out, max_key_len);
+		mv_sha256_result_copy(&ctx, outer);
+
+	} else if (auth_alg == SAM_AUTH_HMAC_SHA2_384) {
+		SHA384_CTX context;
+
+		memset(&context, 0, sizeof(context));
+		mv_sha384_init(&context);
+		mv_sha384_update(&context, in, max_key_len);
+		mv_sha384_result_copy(&context, inner);
+
+		memset(&context, 0, sizeof(context));
+		mv_sha384_init(&context);
+		mv_sha384_update(&context, out, max_key_len);
+		mv_sha384_result_copy(&context, outer);
+
+	} else if (auth_alg == SAM_AUTH_HMAC_SHA2_512) {
+		SHA512_CTX context;
+
+		memset(&context, 0, sizeof(context));
+		mv_sha512_init(&context);
+		mv_sha512_update(&context, in, max_key_len);
+		mv_sha512_result_copy(&context, inner);
+
+		memset(&context, 0, sizeof(context));
+		mv_sha512_init(&context);
+		mv_sha512_update(&context, out, max_key_len);
+		mv_sha512_result_copy(&context, outer);
+	} else {
+		ODP_ERR("Unexpected authentication algorithm\n");
+		rc = -1;
+	}
+	return rc;
+}
+
 static enum sam_auth_alg mvsam_get_auth_alg(odp_auth_alg_t auth_alg)
 {
 	switch(auth_alg)
@@ -232,6 +337,8 @@ static int mvsam_odp_crypto_session_create(
 	struct sam_sa *sa = NULL;
 	int           rc;
 	unsigned int  thr_id;
+	unsigned char inner[64];
+	unsigned char outer[64];
 
 	/* check we aren't pass the maximum number of sessions*/
 	if (odp_unlikely(num_session) == MVSAM_MAX_NUM_SESSIONS_PER_RING) {
@@ -254,11 +361,17 @@ static int mvsam_odp_crypto_session_create(
 	sam_session.cipher_iv      = params->iv.data;
 	sam_session.cipher_key     = params->cipher_key.data;
 	sam_session.cipher_key_len = params->cipher_key.length;
-	if(params->auth_alg != ODP_AUTH_ALG_NULL) {
+	if (params->auth_alg == ODP_AUTH_ALG_MD5_96) {
 		sam_session.auth_icv_len = 12;
 		sam_session.auth_alg     = mvsam_get_auth_alg(params->auth_alg);
-		sam_session.auth_inner   = NULL;
-		sam_session.auth_outer   = NULL;
+		rc = hmac_create_iv(sam_session.auth_alg, params->auth_key.data, 
+					   params->auth_key.length, inner, outer);
+		if (odp_unlikely(rc)) {
+			*status = -1;
+			return -1;
+		}
+		sam_session.auth_inner   = inner;
+		sam_session.auth_outer   = outer;
 		sam_session.auth_aad_len = 0;
 	}
 
@@ -462,7 +575,6 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 	cio->sam_op_params[requests_offs].auth_len    = params->auth_range.length;
 
 	cio->sam_op_params[requests_offs].auth_offset = params->auth_range.offset;
-	cio->sam_op_params[requests_offs].auth_aad    = ((u8 *)odp_packet_data(params->pkt)) + params->cipher_range.offset-24;
 	cio->sam_op_params[requests_offs].num_bufs    = 1;
 
 	if (params->override_iv_ptr != 0)
