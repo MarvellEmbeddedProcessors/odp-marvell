@@ -1548,7 +1548,9 @@ void
 odp_crypto_compl_result(odp_crypto_compl_t completion_event,
 			odp_crypto_op_result_t *result)
 {
+#ifdef ODP_PKTIO_MVSAM
 	struct crypto_thread_info *crp_thr;
+#endif
 	odp_event_t ev = odp_crypto_compl_to_event(completion_event);
 	odp_crypto_generic_op_result_t *op_result;
 
