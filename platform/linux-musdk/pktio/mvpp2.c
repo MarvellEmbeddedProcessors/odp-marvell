@@ -123,7 +123,7 @@ static int find_port_info(port_desc_t *port_desc)
 
 	memset(name, 0, sizeof(name));
 	snprintf(name, sizeof(name), "%s", port_desc->name);
-	if ((err = pp2_netdev_get_port_info(name,
+	if ((err = pp2_netdev_get_ppio_info(name,
 					    &pp,
 					    &ppio)) != 0) {
 		ODP_ERR("PP2 Port %s not found!\n", port_desc->name);
@@ -269,7 +269,6 @@ static int mvpp2_init_global(void)
 {
 	struct pp2_init_params	pp2_params;
 	int			err;
-	uint8_t			num_inst = pp2_get_num_inst();
 
 	/* Master thread. Init locks */
 	odp_ticketlock_init(&thrs_lock);
@@ -278,22 +277,7 @@ static int mvpp2_init_global(void)
 	/* TODO: the following lines should be dynamic! */
 	pp2_params.hif_reserved_map = MVPP2_HIF_RSRV;
 	pp2_params.bm_pool_reserved_map = MVPP2_BPOOL_RSRV;
-	pp2_params.ppios[0][0].is_enabled = 1;
-	pp2_params.ppios[0][0].first_inq = 0;
-	pp2_params.ppios[0][1].is_enabled = 0;
-	pp2_params.ppios[0][1].first_inq = 0;
-	if (num_inst == 1) {
-		pp2_params.ppios[0][2].is_enabled = 1;
-		pp2_params.ppios[0][2].first_inq = 0;
-	}
-	if (num_inst == 2) {
-		pp2_params.ppios[1][0].is_enabled = 1;
-		pp2_params.ppios[1][0].first_inq = 0;
-		pp2_params.ppios[1][1].is_enabled = 1;
-		pp2_params.ppios[1][1].first_inq = 0;
-		pp2_params.ppios[1][2].is_enabled = 0;
-		pp2_params.ppios[1][2].first_inq = 0;
-	}
+
 	err = pp2_init(&pp2_params);
 	if (err != 0) {
 		ODP_ERR("PP2 init failed (%d)!\n", err);
@@ -790,7 +774,6 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 			continue;
 		len = odp_packet_len(pkt);
 		pkt_hdr = odp_packet_hdr(pkt);
-
 		pa = mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(pkt)));
 		pp2_ppio_outq_desc_reset(&descs[i]);
 		pp2_ppio_outq_desc_set_phys_addr(&descs[i], pa);
