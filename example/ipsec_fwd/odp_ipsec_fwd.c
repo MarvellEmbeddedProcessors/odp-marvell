@@ -75,7 +75,7 @@
 #define SHM_OUT_POOL_BUF_SIZE  2048
 #define SHM_OUT_POOL_SIZE      (SHM_OUT_POOL_BUF_COUNT * SHM_OUT_POOL_BUF_SIZE)
 
-#define SHM_CTX_POOL_BUF_SIZE  (sizeof(pkt_ctx_t))
+#define SHM_CTX_POOL_BUF_SIZE  (sizeof(struct pkt_ctx_t))
 #define SHM_CTX_POOL_BUF_COUNT (SHM_PKT_POOL_BUF_COUNT + SHM_OUT_POOL_BUF_COUNT)
 #define SHM_CTX_POOL_SIZE      (SHM_CTX_POOL_BUF_COUNT * SHM_CTX_POOL_BUF_SIZE)
 
@@ -83,7 +83,7 @@
 
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	32
-#define MAX_CTX_DB      MAX_PKT_BURST*8    /* 256 */
+#define MAX_CTX_DB      MAX_PKT_BURST*8*8    /* 256*2*8 */
 
 #define MAX_NB_PKTIO	2
 #define MAX_NB_QUEUE	2
@@ -205,12 +205,14 @@ typedef struct {
 /**
  * Per packet processing context
  */
-typedef struct {
+struct pkt_ctx_t {
 	odp_buffer_t buffer;  /**< Buffer for context */
 	pkt_state_e  state;   /**< Next processing step */
 	ipsec_ctx_t  ipsec;   /**< IPsec specific context */
 	odp_pktout_queue_t pktout; /**< Packet output queue */
-} pkt_ctx_t;
+	odp_bool_t   is_valid;
+	struct pkt_ctx_t *  next_node;
+};
 
 struct l3fwd_pktio_s {
 	odp_pktio_t pktio;
@@ -218,6 +220,13 @@ struct l3fwd_pktio_s {
 	odp_pktin_queue_t ifin[MAX_NB_QUEUE];
 	odp_pktout_queue_t ifout[MAX_NB_QUEUE];
 };
+
+typedef enum {
+	CRYPTO_QUEUE_OUTBOUND_INDEX,
+	CRYPTO_QUEUE_INBOUND_INDEX,
+	CRYPTO_QUEUE_MAX_INDEX
+} crypto_queue_index_e;
+
 
 
 /* helper funcs */
@@ -237,7 +246,7 @@ static odp_pool_t out_pool = ODP_POOL_INVALID;
 static odp_queue_t seqnumq;
 
 /** ORDERED queue (eventually) for per packet crypto API completion events */
-static odp_queue_t completionq;
+static odp_queue_t completionq[CRYPTO_QUEUE_MAX_INDEX];
 
 /** Synchronize threads before packet processing begins */
 static odp_barrier_t sync_barrier;
@@ -280,8 +289,20 @@ static inline void swap_l3(char *buf)
   Context Buffer Manager
 */
 
-static int ctx_buf_mng_next_free_index;
+
+struct pkt_ctx_t *  free_context_next_node = NULL;
 static odp_buffer_t ctx_buf_mng_db[MAX_CTX_DB];
+
+static struct pkt_ctx_t * free_context_get( void ) {
+	struct pkt_ctx_t * current_ctx = free_context_next_node;
+	free_context_next_node = free_context_next_node->next_node;
+	return current_ctx;
+}
+
+static void free_context_release(struct pkt_ctx_t *ctx) {
+	ctx->next_node = free_context_next_node;
+	free_context_next_node = ctx;
+}
 
 static void ctx_buf_mng_init(void) {
 
@@ -292,9 +313,12 @@ static void ctx_buf_mng_init(void) {
 			printf("Bad pointer %s i=%d\n", __func__, i);
 			abort();
 		}
-	}
-	ctx_buf_mng_next_free_index = 0;
 
+		odp_buffer_t ctx_buf = ctx_buf_mng_db[i];
+		struct pkt_ctx_t *ctx = odp_buffer_addr(ctx_buf);
+		ctx->buffer = ctx_buf;
+		free_context_release(ctx);   /* keep all contexes in link list */
+	}
 }
 
 
@@ -307,19 +331,14 @@ static void ctx_buf_mng_init(void) {
  * @return pointer to context area
  */
 static
-pkt_ctx_t *alloc_pkt_ctx(odp_packet_t pkt)
+struct pkt_ctx_t *alloc_pkt_ctx(odp_packet_t pkt)
 {
-	odp_buffer_t ctx_buf = ctx_buf_mng_db[ctx_buf_mng_next_free_index];// odp_buffer_alloc(ctx_pool);
-
-	if (++ctx_buf_mng_next_free_index >= MAX_CTX_DB-1 ) {
-		ctx_buf_mng_next_free_index = 0;
+	struct pkt_ctx_t *ctx = free_context_get();
+	if ( ctx == NULL ) {
+		printf("alloc_pkt_ctx: No more free contexes\n");
+		return NULL;
 	}
 
-	pkt_ctx_t *ctx;
-
-	ctx = odp_buffer_addr(ctx_buf);
-	memset(ctx, 0, sizeof(*ctx));
-	ctx->buffer = ctx_buf;
 	odp_packet_user_ptr_set(pkt, ctx);
 
 	return ctx;
@@ -331,11 +350,9 @@ pkt_ctx_t *alloc_pkt_ctx(odp_packet_t pkt)
  * @param ctx  Packet context
  */
 static
-void free_pkt_ctx(pkt_ctx_t *ctx UNUSED)
+void free_pkt_ctx(struct pkt_ctx_t *ctx)
 {
-//	odp_buffer_free(ctx->buffer);
-
-
+	free_context_release(ctx);
 }
 
 /**
@@ -441,8 +458,19 @@ void ipsec_init_pre(void)
 	qparam.sched.sync  = ODP_SCHED_SYNC_ATOMIC;
 	qparam.sched.group = ODP_SCHED_GROUP_ALL;
 
-	completionq = queue_create("completion", &qparam);
-	if (ODP_QUEUE_INVALID == completionq) {
+	completionq[CRYPTO_QUEUE_OUTBOUND_INDEX] = queue_create("completion_out", &qparam);
+	if (ODP_QUEUE_INVALID == completionq[CRYPTO_QUEUE_OUTBOUND_INDEX]) {
+		EXAMPLE_ERR("Error: completion queue creation failed\n");
+		exit(EXIT_FAILURE);
+	}
+
+	qparam.type        = ODP_QUEUE_TYPE_PLAIN;
+	qparam.sched.prio  = ODP_SCHED_PRIO_HIGHEST;
+	qparam.sched.sync  = ODP_SCHED_SYNC_ATOMIC;
+	qparam.sched.group = ODP_SCHED_GROUP_ALL;
+
+	completionq[CRYPTO_QUEUE_INBOUND_INDEX] = queue_create("completion_in", &qparam);
+	if (ODP_QUEUE_INVALID == completionq[CRYPTO_QUEUE_INBOUND_INDEX]) {
 		EXAMPLE_ERR("Error: completion queue creation failed\n");
 		exit(EXIT_FAILURE);
 	}
@@ -518,12 +546,14 @@ void ipsec_init_post(crypto_api_mode_e api_mode)
 						     tun,
 						     api_mode,
 						     entry->input,
-						     completionq,
-						     out_pool)) {
+						     (entry->input) ?  completionq[CRYPTO_QUEUE_INBOUND_INDEX] : completionq[CRYPTO_QUEUE_OUTBOUND_INDEX],
+							 out_pool)) {
 				EXAMPLE_ERR("Error: IPSec cache entry failed.\n"
 						);
 				exit(EXIT_FAILURE);
 			}
+
+			dprintf("entry->input %d completionq %lu64\n", entry->input, odp_queue_to_u64((entry->input) ?  completionq[CRYPTO_QUEUE_INBOUND_INDEX] : completionq[CRYPTO_QUEUE_OUTBOUND_INDEX])); 
 		} else {
 			printf(" WARNING: SA not found for SP\n");
 			dump_sp_db_entry(entry);
@@ -644,7 +674,7 @@ void initialize_intf(char *intf, int if_index)
  */
 static
 pkt_disposition_e do_input_verify(odp_packet_t pkt,
-				  pkt_ctx_t *ctx EXAMPLE_UNUSED)
+				  struct pkt_ctx_t *ctx EXAMPLE_UNUSED)
 {
 	if (odp_unlikely(odp_packet_has_error(pkt)))
 		return PKT_DROP;
@@ -667,7 +697,7 @@ pkt_disposition_e do_input_verify(odp_packet_t pkt,
  * @return PKT_CONTINUE if route found else PKT_DROP
  */
 static
-pkt_disposition_e do_route_fwd_db(odp_packet_t pkt, pkt_ctx_t *ctx)
+pkt_disposition_e do_route_fwd_db(odp_packet_t pkt, struct pkt_ctx_t *ctx)
 {
 	odph_ipv4hdr_t *ip = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
 	fwd_db_entry_t *entry;
@@ -703,7 +733,7 @@ pkt_disposition_e do_route_fwd_db(odp_packet_t pkt, pkt_ctx_t *ctx)
  */
 static
 pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
-				       pkt_ctx_t *ctx,
+				       struct pkt_ctx_t *ctx,
 				       odp_bool_t *skip,
 				       odp_crypto_op_result_t *result)
 {
@@ -806,7 +836,7 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
  */
 static
 pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
-				     pkt_ctx_t *ctx,
+				     struct pkt_ctx_t *ctx,
 				     odp_crypto_op_result_t *result)
 {
 	odph_ipv4hdr_t *ip;
@@ -913,7 +943,7 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
  */
 static
 pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
-					pkt_ctx_t *ctx,
+					struct pkt_ctx_t *ctx,
 					odp_bool_t *skip)
 {
 	uint8_t *buf = odp_packet_data(pkt);
@@ -1086,7 +1116,7 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
  */
 static
 pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
-				   pkt_ctx_t *ctx,
+				   struct pkt_ctx_t *ctx,
 				   odp_crypto_op_result_t *result)
 {
 	uint8_t *buf = odp_packet_data(pkt);
@@ -1142,7 +1172,7 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
  */
 static
 pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
-				      pkt_ctx_t *ctx,
+				      struct pkt_ctx_t *ctx,
 				      odp_crypto_op_result_t *result)
 {
 	odph_ipv4hdr_t *ip;
@@ -1173,26 +1203,99 @@ pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
 static odp_event_t  after_crypto_events[MAX_PKT_BURST];
 static odp_packet_t after_crypto_pkt_outgoing[MAX_PKT_BURST];
 static odp_packet_t after_crypto_pkt_ingoing[MAX_PKT_BURST];
-static pkt_ctx_t	*after_crypto_ctx[MAX_PKT_BURST];
 
-static
-int crypto_rx_handler(void)
-{
+
+static int crypto_rx_handler_inbound(void) {
+
+	int pkt_index;
+	pkt_disposition_e rc = 0;
+	odp_crypto_op_result_t result;
+	int after_crypto_pkt_ingoing_index = 0;
+	int after_crypto_pkts;
+	odp_pktout_queue_t output_ingoing_queue;
+	struct pkt_ctx_t	*after_crypto_ctx[MAX_CTX_DB];
+
+	/* Encryption: src_port = 0;  dsp_port = 1; Decryption:  src_port = 1;	dsp_port = 0; - for demo only  */
+
+	/* FROM CRYPTO */
+	after_crypto_pkts = odp_queue_deq_multi(completionq[CRYPTO_QUEUE_INBOUND_INDEX], after_crypto_events, MAX_PKT_BURST);
+	if (after_crypto_pkts < 1) {
+		return 0;
+	}
+
+	for (pkt_index = 0; pkt_index < after_crypto_pkts; pkt_index++) {
+		odp_crypto_compl_t compl;
+
+		compl = odp_crypto_compl_from_event(after_crypto_events[pkt_index]);
+		odp_crypto_compl_result(compl, &result);
+		odp_crypto_compl_free(compl);
+		after_crypto_ctx[pkt_index] = result.ctx;
+
+		dprintf("AFTER CRYPTO crypto_rx_handler_inbound %d\n", after_crypto_pkts);
+
+		if (PKT_STATE_IPSEC_IN_FINISH != after_crypto_ctx[pkt_index]->state) {    /* Decryption */
+			printf("BAD DIRECTION: rx packet for encryption in INBOUND function!!!!\n");
+		}
+
+		dprintf("ODP Main Loop 6: Decryption odp_packet_from_event rc=%d state=%d  packet=%d\n", rc, after_crypto_ctx[pkt_index]->state, pkt_index);
+		after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index] = result.pkt;
+
+#ifdef IPSEC_DEBUG
+				printf("After CRYPTO-DECRYPTION\n");
+				odp_packet_print(result.pkt);
+#endif
+
+		/* Handle decryption  */
+
+		rc = do_ipsec_in_finish(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index], after_crypto_ctx[pkt_index], &result);
+		if (odp_unlikely(rc == PKT_DROP)) {
+			free_pkt_ctx(after_crypto_ctx[pkt_index]);
+			odp_packet_free(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index]);
+			continue;
+		}
+
+		dprintf("ODP Main Loop 14: do_ipsec_in_finish packet=%d\n", pkt_index);
+
+		rc = do_route_fwd_db(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index], after_crypto_ctx[pkt_index]);
+		if (odp_unlikely(rc == PKT_DROP)) {
+			free_pkt_ctx(after_crypto_ctx[pkt_index]);
+			odp_packet_free(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index]);
+			continue;
+		}
+
+		output_ingoing_queue = after_crypto_ctx[pkt_index]->pktout;  /* take output queue after forwarding decision */
+
+		free_pkt_ctx(after_crypto_ctx[pkt_index]);
+		after_crypto_pkt_ingoing_index++;
+
+		dprintf("ODP Main Loop 15: do_route_fwd_db packet=%d\n", pkt_index);
+
+	}
+
+	int sent_decrypted = 0;
+	if (after_crypto_pkt_ingoing_index) {
+		sent_decrypted = odp_pktout_send(output_ingoing_queue, after_crypto_pkt_ingoing, after_crypto_pkt_ingoing_index);
+		dprintf("ODP Main Loop 12: TX ingoing sent=%d from %d\n", sent_decrypted, after_crypto_pkt_ingoing_index);
+	}
+
+	return sent_decrypted;
+}
+
+
+static int crypto_rx_handler_outbound(void) {
 
 	int pkt_index;
 	pkt_disposition_e rc = 0;
 	odp_crypto_op_result_t result;
 	int after_crypto_pkt_outgoing_index = 0;
-	int after_crypto_pkt_ingoing_index = 0;
 	int after_crypto_pkts;
 	odp_pktout_queue_t output_outgoing_queue;
-	odp_pktout_queue_t output_ingoing_queue;
-	
+	struct pkt_ctx_t	*after_crypto_ctx[MAX_CTX_DB];
 
 	/* Encryption: src_port = 0;  dsp_port = 1; Decryption:  src_port = 1;	dsp_port = 0; - for demo only  */
 
 	/* FROM CRYPTO */
-	after_crypto_pkts = odp_queue_deq_multi(completionq, after_crypto_events, MAX_PKT_BURST);
+	after_crypto_pkts = odp_queue_deq_multi(completionq[CRYPTO_QUEUE_OUTBOUND_INDEX], after_crypto_events, MAX_PKT_BURST);
 	if (after_crypto_pkts < 1) {
 		return 0;
 	}
@@ -1208,49 +1311,31 @@ int crypto_rx_handler(void)
 		dprintf("AFTER CRYPTO after_crypto_pkts %d\n", after_crypto_pkts);
 
 		if (PKT_STATE_IPSEC_IN_FINISH == after_crypto_ctx[pkt_index]->state) {    /* Decryption */
-			dprintf("ODP Main Loop 6: Decryption odp_packet_from_event rc=%d state=%d  packet=%d\n", rc, after_crypto_ctx[pkt_index]->state, pkt_index);
-		
-			after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index] = result.pkt;
-
-			/* Handle decryption  */
-
-			rc = do_ipsec_in_finish(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index], after_crypto_ctx[pkt_index], &result);
-			if (odp_unlikely(rc == PKT_DROP)) {
-				odp_packet_free(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index]);
-				continue;
-			}
-
-			dprintf("ODP Main Loop 14: do_ipsec_in_finish packet=%d\n", pkt_index);
-
-			rc = do_route_fwd_db(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index], after_crypto_ctx[pkt_index]);
-			if (odp_unlikely(rc == PKT_DROP)) {
-				odp_packet_free(after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index]);
-				continue;
-			}
-
-			output_ingoing_queue = after_crypto_ctx[pkt_index]->pktout;  /* take output queue after forwarding decision */
-
-			after_crypto_pkt_ingoing_index++;
-
-			dprintf("ODP Main Loop 15: do_route_fwd_db packet=%d\n", pkt_index);
-		} else {   /* Encryption */
-			dprintf("ODP Main Loop 7: Encryption odp_packet_from_event state=%d  packet=%d\n", after_crypto_ctx[pkt_index]->state, pkt_index);
-
-			after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index] = result.pkt;
-			output_outgoing_queue = after_crypto_ctx[pkt_index]->pktout;
-
-			/* Handle Encryption */
-			rc = do_ipsec_out_finish(after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index], after_crypto_ctx[pkt_index], &result);
-
-			dprintf("ODP Main Loop 10: do_ipsec_out_finish rc=%d result=%d\n", rc, result.ok);
-
-			if (odp_unlikely(rc == PKT_DROP)) {
-				odp_packet_free(after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index]);
-				continue;
-			}
-
-			after_crypto_pkt_outgoing_index++;
+			printf("BAD DIRECTION: rx packet for decryption in OUTBOUND function!!!!\n");
 		}
+
+#ifdef IPSEC_DEBUG
+				printf("After CRYPTO\n");
+				odp_packet_print(result.pkt);
+#endif
+
+		dprintf("ODP Main Loop 7: Encryption odp_packet_from_event state=%d  packet=%d\n", after_crypto_ctx[pkt_index]->state, pkt_index);
+
+		after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index] = result.pkt;
+		output_outgoing_queue = after_crypto_ctx[pkt_index]->pktout;
+
+		/* Handle Encryption */
+		rc = do_ipsec_out_finish(after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index], after_crypto_ctx[pkt_index], &result);
+
+		dprintf("ODP Main Loop 10: do_ipsec_out_finish rc=%d result=%d\n", rc, result.ok);
+
+		if (odp_unlikely(rc == PKT_DROP)) {
+			free_pkt_ctx(after_crypto_ctx[pkt_index]);
+			odp_packet_free(after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index]);
+			continue;
+		}
+		free_pkt_ctx(after_crypto_ctx[pkt_index]);
+		after_crypto_pkt_outgoing_index++;
 	}
 
 	int sent_encrypted = 0;
@@ -1259,11 +1344,25 @@ int crypto_rx_handler(void)
 		dprintf("ODP Main Loop 11: TX outgoing sent=%d from %d\n", sent_encrypted, after_crypto_pkt_outgoing_index);
 	}
 
-	int sent_decrypted = 0;
-	if (after_crypto_pkt_ingoing_index) {
-		sent_decrypted += odp_pktout_send(output_ingoing_queue, after_crypto_pkt_ingoing, after_crypto_pkt_ingoing_index);
-		dprintf("ODP Main Loop 12: TX ingoing sent=%d from %d\n", sent_decrypted, after_crypto_pkt_ingoing_index);
+	return sent_encrypted;
+
+}
+
+
+static
+int crypto_rx_handler(void)
+{
+
+	/* FROM CRYPTO */
+	int sent_encrypted = crypto_rx_handler_inbound();
+	int sent_decrypted = crypto_rx_handler_outbound();
+
+#ifdef IPSEC_DEBUG
+	if ( sent_encrypted + sent_decrypted != 0 ) {
+		dprintf("crypto_rx_handler 20: sent_encrypted %d sent_decrypted %d\n", sent_encrypted,  sent_decrypted);
 	}
+#endif
+
 	return sent_decrypted + sent_encrypted;
 
 }
@@ -1272,7 +1371,7 @@ static
 void network_rx_handler(odp_packet_t *pkt_tbl, int pkts) {
 
 	int pkt_index;
-	pkt_ctx_t	*ctx[MAX_PKT_BURST];
+	struct pkt_ctx_t	*ctx[MAX_PKT_BURST];
 	pkt_disposition_e rc;
 	odp_crypto_op_result_t result;
 	odp_bool_t skip = FALSE;
@@ -1284,6 +1383,10 @@ void network_rx_handler(odp_packet_t *pkt_tbl, int pkts) {
 		if (pkts-pkt_index > PREFETCH_SHIFT)
 			odp_packet_prefetch(pkt_tbl[pkt_index+PREFETCH_SHIFT], 0, ODPH_ETHHDR_LEN);
 #endif /* USE_APP_PREFETCH */
+#ifdef  IPSEC_DEBUG
+		odp_packet_print(pkt_tbl[pkt_index]);
+#endif
+
 		ctx[pkt_index] = alloc_pkt_ctx(pkt_tbl[pkt_index]);
 		rc = do_input_verify(pkt_tbl[pkt_index], ctx[pkt_index]);
 		CHECK_RC(rc, ctx, pkt_tbl, pkt_index, 1);
