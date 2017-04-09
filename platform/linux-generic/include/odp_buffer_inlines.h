@@ -197,6 +197,8 @@ static inline void _odp_buffer_event_type_set(odp_buffer_t buf, int ev)
 }
 
 #ifdef MV_NETMAP_BUF_ZERO_COPY
+int netmap_pkt_free(odp_buffer_t buf);
+
 static inline void seg_swap_ext_buf(odp_buffer_hdr_t	*buf_hdr,
 				    void		*buf,
 				    uint32_t		 size,
@@ -205,6 +207,7 @@ static inline void seg_swap_ext_buf(odp_buffer_hdr_t	*buf_hdr,
 				    uint16_t		 data_offs
 				   )
 {
+	buf_hdr->ext_buf_free_cb = netmap_pkt_free;
 	buf_hdr->netmap_buf_inf.orig_buf = buf_hdr->addr[0];
 	buf_hdr->addr[0] = buf;
 	buf_hdr->netmap_buf_inf.orig_size = buf_hdr->size;
@@ -222,6 +225,7 @@ static inline void seg_swap_orig_buf(odp_buffer_hdr_t	 *buf_hdr,
 				     uint16_t		 *data_offs
 				    )
 {
+	buf_hdr->ext_buf_free_cb = NULL;
 	buf_hdr->addr[0] = buf_hdr->netmap_buf_inf.orig_buf;
 	buf_hdr->netmap_buf_inf.orig_buf = NULL;
 	buf_hdr->size = buf_hdr->netmap_buf_inf.orig_size;

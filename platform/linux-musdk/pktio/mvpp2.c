@@ -153,6 +153,35 @@ static int find_free_bpool(void)
 	return i;
 }
 
+static int mvpp2_free_buf(odp_buffer_t buf)
+{
+	odp_packet_t pkt = _odp_packet_from_buffer(buf);
+	struct pp2_buff_inf buff_inf;
+	odp_packet_hdr_t *pkt_hdr;
+	struct pp2_hif	*hif = thds[get_thr_id()].hif;
+	int err;
+
+	pkt_hdr = odp_packet_hdr(pkt);
+
+	if (unlikely(!pkt_hdr)) {
+		ODP_ERR("mvpp2_free_buf: invalid pkt!\n");
+		return -1;
+	}
+
+	if (unlikely(!pkt_hdr->input)) {
+		ODP_ERR("mvpp2_free_buf: invalid input! frame_len: %d\n", pkt_hdr->frame_len);
+		return -1;
+	}
+
+	buff_inf.cookie =
+			lower_32_bits((u64)(uintptr_t)pkt); /* cookie contains lower_32_bits of the va */
+	buff_inf.addr   =
+		(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(pkt_hdr);
+	err = pp2_bpool_put_buff(hif, get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool, &buff_inf);
+
+	return err;
+}
+
 static int fill_bpool(odp_pool_t	 pool,
 		      struct pp2_bpool	*bpool,
 		      struct pp2_hif	*hif,
@@ -160,6 +189,7 @@ static int fill_bpool(odp_pool_t	 pool,
 		      int		 alloc_len)
 {
 	int			 i, err = 0;
+	odp_packet_hdr_t	*pkt_hdr;
 #ifndef USE_LPBK_SW_RECYLCE
 	odp_packet_t		 pkt;
 	static int		 first = 1;
@@ -199,6 +229,12 @@ static int fill_bpool(odp_pool_t	 pool,
 			ODP_ERR("Allocated invalid pkt (no buffer)!\n");
 			continue;
 		}
+		pkt_hdr = odp_packet_hdr(pkt);
+		if (pkt_hdr->buf_hdr.ext_buf_free_cb) {
+			ODP_ERR("pkt(%p)  ext_buf_free_cb was set; skipping\n", pkt);
+			continue;
+		}
+		pkt_hdr->buf_hdr.ext_buf_free_cb = mvpp2_free_buf;
 
 		buff_inf.cookie =
 			lower_32_bits((u64)(uintptr_t)pkt); /* cookie contains lower_32_bits of the va */
@@ -245,6 +281,14 @@ static int fill_bpool(odp_pool_t	 pool,
 			ODP_ERR("Allocated invalid pkt (no buffer)!\n");
 			continue;
 		}
+
+		pkt_hdr = odp_packet_hdr(pkt[i]);
+		if (pkt_hdr->buf_hdr.ext_buf_free_cb) {
+			ODP_ERR("pkt(%p)  ext_buf_free_cb was set; skipping\n", pkt[i]);
+			continue;
+		}
+		pkt_hdr->buf_hdr.ext_buf_free_cb = mvpp2_free_buf;
+
 		buff_array[j].bpool = bpool;
 		buff_array[j].buff.cookie =
 			lower_32_bits((u64)(uintptr_t)pkt[i]); /* cookie contains lower_32_bits of the va */
@@ -661,7 +705,6 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	u8			 l3_offset, l4_offset;
 #endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
 	u8			 tc, qid, first_qid, num_qids;
-  	u32			 tmp_num_buffs = 0;
 
 	total_got = 0;
 	if (num_pkts > (CONFIG_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_TC))
@@ -712,17 +755,6 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			pkt_hdr->input = pktio_entry->s.handle;
 		}
 	}
-
-	/* Temporary work-around : Check if we need to re-fill BPool from the SW-pool */
-	pp2_bpool_get_num_buffs(pktio_entry->s.pkt_mvpp2.bpool, &tmp_num_buffs);
-	if (unlikely(tmp_num_buffs <=  2 * CONFIG_BURST_SIZE)) {
-		int rc;
-          	rc = fill_bpool(pktio_entry->s.pkt_mvpp2.pool, pktio_entry->s.pkt_mvpp2.bpool, thds[get_thr_id()].hif,
-				CONFIG_BURST_SIZE, pktio_entry->s.pkt_mvpp2.mtu);
-          	if (rc < -1)
-				ODP_ERR("can't fill port pool with buffs!\n");
-        }
-
 	if (!inqs[rxq_id].lockless)
 		odp_ticketlock_unlock(&inqs[rxq_id].lock);
 
