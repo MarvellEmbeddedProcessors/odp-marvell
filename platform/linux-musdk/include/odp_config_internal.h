@@ -29,6 +29,7 @@ extern "C" {
 #define MVPP2_Q_SIZE			1024
 #define MVPP2_DFLT_MTU			1500
 
+/*#define MVPP2_BPOOL_REFILL_WA*/
 #define MVPP2_PKT_PARSE_SUPPORT	1
 #define MVPP2_CSUM_OFF_SUPPORT	0
 

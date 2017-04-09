@@ -677,7 +677,9 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	u8			 l3_offset, l4_offset;
 #endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
 	u8			 tc, qid, first_qid, num_qids;
+#ifdef MVPP2_BPOOL_REFILL_WA
   	u32			 tmp_num_buffs = 0;
+#endif /* MVPP2_BPOOL_REFILL_WA */
 
 	total_got = 0;
 	if (num_pkts > (CONFIG_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_TC))
@@ -729,6 +731,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		}
 	}
 
+#ifdef MVPP2_BPOOL_REFILL_WA
 	/* Temporary work-around : Check if we need to re-fill BPool from the SW-pool */
 	pp2_bpool_get_num_buffs(pktio_entry->s.pkt_mvpp2.bpool, &tmp_num_buffs);
 	if (unlikely(tmp_num_buffs <=  2 * CONFIG_BURST_SIZE)) {
@@ -738,6 +741,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
           	if (rc < -1)
 				ODP_ERR("can't fill port pool with buffs!\n");
         }
+#endif /* MVPP2_BPOOL_REFILL_WA */
 
 	if (!inqs[rxq_id].lockless)
 		odp_ticketlock_unlock(&inqs[rxq_id].lock);
