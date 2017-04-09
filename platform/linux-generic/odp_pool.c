@@ -461,7 +461,9 @@ odp_pool_t _pool_create(const char *name,
 			tmp->segcount = 0;
 			tmp->segsize = pool->s.seg_size;
 			tmp->handle.handle = odp_buffer_encode_handle(tmp);
-
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+			tmp->ext_buf_free_cb = NULL;
+#endif
 			/* Set 1st seg addr for zero-len buffers */
 			tmp->addr[0] = NULL;
 
@@ -987,6 +989,11 @@ void buffer_free_multi(uint32_t pool_id,
 		uint32_t id;
 
 		buf_hdr[i] = odp_buf_to_hdr(buf[i]);
+
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+		if (buf_hdr[i]->ext_buf_free_cb && (!buf_hdr[i]->ext_buf_free_cb(buf[i])))
+			continue;
+#endif /* MV_NETMAP_BUF_ZERO_COPY || MV_MUSDK_FREE_BUF_SUPPORT */
 		ODP_ASSERT(buf_hdr[i]->allocator != ODP_FREEBUF);
 		buf_hdr[i]->allocator = ODP_FREEBUF;
 		id = pool_handle_to_index(buf_hdr[i]->pool_hdl);
@@ -1034,15 +1041,10 @@ void buffer_free(uint32_t pool_id, const odp_buffer_t buf)
 
 	buf_hdr = odp_buf_to_hdr(buf);
 
-#ifdef MV_NETMAP_BUF_ZERO_COPY
-	if (is_ext_buffer(buf_hdr)) {
-		if (!ext_buf_free_cb)
-			printf("ERROR: got extenral invalid buff! ignoring (oooppps, we have a leak ...)\n");
-		else
-			ext_buf_free_cb(buf);
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+	if (buf_hdr->ext_buf_free_cb && (!buf_hdr->ext_buf_free_cb(buf)))
 		return;
-	}
-#endif /* MV_NETMAP_BUF_ZERO_COPY */
+#endif /* MV_NETMAP_BUF_ZERO_COPY || MV_MUSDK_FREE_BUF_SUPPORT */
 
 	ODP_ASSERT(buf_hdr->allocator != ODP_FREEBUF);
 	buf_hdr->allocator = ODP_FREEBUF;

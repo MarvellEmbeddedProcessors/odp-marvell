@@ -55,7 +55,7 @@ uint64_t total_tx[NM_MAX_NUM_QUEUES] = {};
 #ifdef MV_NETMAP_BUF_ZERO_COPY
 extern int (*ext_buf_free_cb)(odp_buffer_t buf);
 
-static int netmap_pkt_free(odp_buffer_t buf)
+int netmap_pkt_free(odp_buffer_t buf)
 {
 	struct netmap_ring	*ring;
 	uint32_t		 buf_idx;

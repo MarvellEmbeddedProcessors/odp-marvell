@@ -34,6 +34,7 @@ extern "C" {
 #include <stddef.h>
 
 #define MV_NETMAP_BUF_ZERO_COPY
+#define MV_MUSDK_FREE_BUF_SUPPORT
 
 #define ODP_BITSIZE(x) \
 	((x) <=     2 ?  1 : \
@@ -141,6 +142,9 @@ struct odp_buffer_hdr_t {
 #ifdef MV_NETMAP_BUF_ZERO_COPY
 	struct odp_netmap_buf_info	netmap_buf_inf;
 #endif /* MV_NETMAP_BUF_ZERO_COPY */
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+	int			(*ext_buf_free_cb)(odp_buffer_t buf);
+#endif
 	int16_t                  allocator;  /* allocating thread id */
 	int8_t                   type;       /* buffer type */
 	odp_event_type_t         event_type; /* for reuse as event */
