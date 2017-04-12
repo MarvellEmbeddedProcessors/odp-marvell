@@ -33,6 +33,7 @@
 /*#define USE_HW_BUFF_RECYLCE*/
 #define MAX_NUM_QS_PER_CORE		MVPP2_MAX_NUM_TCS_PER_PORT
 #define MAX_NUM_PACKPROCS		1
+#define SHADOW_Q_SIZE			MVPP2_Q_SIZE
 
 #define upper_32_bits(n) ((u32)(((n) >> 16) >> 16))
 #define lower_32_bits(n) ((u32)(n))
@@ -62,8 +63,7 @@ typedef struct port_desc {
 struct tx_shadow_q {
 	u16				 read_ind;
 	u16				 write_ind;
-
-	struct pp2_buff_inf		 buffs_inf[MVPP2_Q_SIZE];
+	struct buff_release_entry	 ent[SHADOW_Q_SIZE];
 };
 
 /* Per thread unique ID used during run-time BM and HIF
@@ -204,9 +204,8 @@ static int fill_bpool(odp_pool_t	 pool,
 
 #ifndef USE_LPBK_SW_RECYLCE
 	for (i = 0; i < num; i++) {
-		if (packet_alloc_multi(pool, alloc_len, &pkt, 1) != 1)
-			return -1;
-		if (!pkt || (pkt == ODP_PACKET_INVALID)) {
+		pkt = odp_packet_alloc(pool, alloc_len);
+		if (pkt == ODP_PACKET_INVALID) {
 			ODP_ERR("Allocated invalid pkt; skipping!\n");
 			continue;
 		}
@@ -250,7 +249,7 @@ static int fill_bpool(odp_pool_t	 pool,
 	if ((final_num = packet_alloc_multi(pool, alloc_len, pkt, num)) != num)
 		err = -1;
 	i = 0;
-	while((i < final_num) && (!pkt[i] || pkt[i] == ODP_PACKET_INVALID)) {
+	while ((i < final_num) && (pkt[i] == ODP_PACKET_INVALID)) {
 		ODP_ERR("Allocated invalid pkt, pkt_num %d out of %d; skipping!\n", i, final_num);
 		i++;
 	}
@@ -267,7 +266,7 @@ static int fill_bpool(odp_pool_t	 pool,
 	odp_ticketlock_unlock(&thrs_lock);
 
 	for (; i < final_num; i++) {
-		if (!pkt[i] || (pkt[i] == ODP_PACKET_INVALID)) {
+		if (pkt[i] == ODP_PACKET_INVALID) {
 			ODP_ERR("Allocated invalid pkt; skipping!\n");
 			continue;
 		}
@@ -295,6 +294,11 @@ static int fill_bpool(odp_pool_t	 pool,
 		buff_array[j].buff.addr =
 			(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(odp_packet_head(pkt[i]));
 		j++;
+		if (j == MVPP2_Q_SIZE) {
+			num_bufs = j;
+			err2 = pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
+			j = 0;
+		}
 	}
 	num_bufs = j;
 	err2 = pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
@@ -369,6 +373,7 @@ static int mvpp2_init_local(void)
 		return -EIO;
 	}
 
+	memset(thds[id].shadow_qs, 0, sizeof(thds[id].shadow_qs));
 	return 0;
 }
 
@@ -690,6 +695,87 @@ static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 	return 1;
 }
 
+#ifndef USE_HW_BUFF_RECYLCE
+static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif *hif,
+					   struct tx_shadow_q *shadow_q, u8 tc)
+{
+	u16			 num_conf = 0;
+
+	shadow_q = &thds[get_thr_id()].shadow_qs[tc];
+
+	pp2_ppio_get_num_outq_done(ppio, hif, tc, &num_conf);
+
+#ifndef USE_LPBK_SW_RECYLCE
+	{
+		int i;
+
+		for (i = 0; i < num_conf; i++) {
+			struct buff_release_entry *entry;
+
+			entry = &shadow_q->ent[shadow_q->read_ind];
+			if (unlikely(!entry->buff.cookie && !entry->buff.addr)) {
+				ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
+					shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
+				shadow_q->read_ind++;
+				if (shadow_q->read_ind == SHADOW_Q_SIZE)
+					shadow_q->read_ind = 0;
+				continue;
+			}
+			shadow_q->read_ind++;
+			if (shadow_q->read_ind == SHADOW_Q_SIZE)
+				shadow_q->read_ind = 0;
+			if (likely(entry->bpool)) {
+				pp2_bpool_put_buff(hif, entry->bpool, &entry->buff);
+			} else {
+				odp_packet_t pkt;
+
+				pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie | sys_dma_high_addr);
+				odp_packet_free_multi(&pkt, 1);
+			}
+		}
+	}
+#else
+	{
+		u16 num_bufs = 0;
+		int i;
+
+		for (i = 0; i < num_conf; i++) {
+			struct buff_release_entry *entry;
+
+			entry = &shadow_q->ent[shadow_q->read_ind + num_bufs];
+			if (unlikely(!entry->buff.cookie && !entry->buff.addr)) {
+				ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
+					shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
+				goto skip_buf;
+			}
+			if (unlikely(!(entry->bpool))) {
+				odp_packet_t pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie | sys_dma_high_addr);
+
+				odp_packet_free_multi(&pkt, 1);
+				goto skip_buf;
+			}
+
+			num_bufs++;
+			if (unlikely(shadow_q->read_ind + num_bufs == SHADOW_Q_SIZE))
+				goto skip_buf;
+			continue;
+skip_buf:
+			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
+			shadow_q->read_ind += num_bufs;
+			num_bufs = 0;
+			if (shadow_q->read_ind == SHADOW_Q_SIZE)
+				shadow_q->read_ind = 0;
+		}
+		if (num_bufs) {
+			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
+			shadow_q->read_ind += num_bufs;
+		}
+	}
+
+#endif /* USE_LPBK_SW_RECYLCE */
+}
+#endif /* USE_HW_BUFF_RECYLCE */
+
 static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		      int rxq_id,
 		      odp_packet_t pkt_table[],
@@ -777,15 +863,10 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	dma_addr_t		 pa;
 	u16			 i, num, len;
 #ifndef USE_HW_BUFF_RECYLCE
-	u16			 num_conf;
 #endif /* !USE_HW_BUFF_RECYLCE */
 	u8			 tc;
 	int			 err;
-#ifdef USE_LPBK_SW_RECYLCE
-	u16 buf_index = 0, num_bufs = 0;
-	struct buff_release_entry buff_array[MVPP2_Q_SIZE];
-#endif
-
+	struct pp2_ppio		*ppio = pktio_entry->s.pkt_mvpp2.ppio;
 
 	/* TODO: only support now RSS; no support for QoS; how to translate txq_id to tc/hif???? */
 	tc = 0;
@@ -794,16 +875,17 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	hif = thds[get_thr_id()].hif;
 #ifndef USE_HW_BUFF_RECYLCE
 	shadow_q = &thds[get_thr_id()].shadow_qs[tc];
+	mvpp2_free_sent_buffers(ppio, hif, shadow_q, tc);
 #endif /* !USE_HW_BUFF_RECYLCE */
 
+	if (!num_pkts)
+		return 0;
 	num = num_pkts;
 	if (num > CONFIG_BURST_SIZE)
 		num = CONFIG_BURST_SIZE;
 
 	for (i = 0; i < num; i++) {
 		pkt = pkt_table[i];
-		if (!pkt)
-			continue;
 		len = odp_packet_len(pkt);
 		pkt_hdr = odp_packet_hdr(pkt);
 		pa = mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(pkt)));
@@ -853,73 +935,19 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		pp2_ppio_outq_desc_set_cookie(&descs[i], lower_32_bits((u64)(uintptr_t)pkt));
 		pp2_ppio_outq_desc_set_pool(&descs[i], pktio_entry->s.pkt_mvpp2.bpool);
 #else
-		shadow_q->buffs_inf[shadow_q->write_ind].cookie = lower_32_bits((u64)(uintptr_t)pkt);
-		shadow_q->buffs_inf[shadow_q->write_ind].addr = pa;
+		shadow_q->ent[shadow_q->write_ind].buff.cookie = lower_32_bits((u64)(uintptr_t)pkt);
+		shadow_q->ent[shadow_q->write_ind].buff.addr = pa;
+		shadow_q->ent[shadow_q->write_ind].bpool = (pkt_hdr->input) ?
+							   get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool :
+							   NULL;
 		shadow_q->write_ind++;
-		if (shadow_q->write_ind == MVPP2_Q_SIZE)
+		if (shadow_q->write_ind == SHADOW_Q_SIZE)
 			shadow_q->write_ind = 0;
 #endif /* USE_HW_BUFF_RECYLCE */
 	}
-	err = pp2_ppio_send(pktio_entry->s.pkt_mvpp2.ppio, hif, tc, descs, &num);
+	err = pp2_ppio_send(ppio, hif, tc, descs, &num);
 	if (num && (err != 0))
 		return 0;
-
-#ifndef USE_HW_BUFF_RECYLCE
-	pp2_ppio_get_num_outq_done(pktio_entry->s.pkt_mvpp2.ppio, hif, tc, &num_conf);
-#ifndef USE_LPBK_SW_RECYLCE
-	for (i = 0; i < num_conf; i++) {
-		struct pp2_buff_inf	*binf;
-
-		binf = &shadow_q->buffs_inf[shadow_q->read_ind];
-		if (unlikely(!binf->cookie || !binf->addr)) {
-			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
-				shadow_q->read_ind, (u64)binf->cookie, (u64)binf->addr);
-			continue;
-		}
-		shadow_q->read_ind++;
-		if (shadow_q->read_ind == MVPP2_Q_SIZE)
-			shadow_q->read_ind = 0;
-		pkt_hdr = odp_packet_hdr((odp_packet_t)((uintptr_t)binf->cookie | sys_dma_high_addr));
-		if (likely(pkt_hdr->input)) {
-			pp2_bpool_put_buff(hif, get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool, binf);
-		} else {
-			pkt = (odp_packet_t)((uintptr_t)binf->cookie | sys_dma_high_addr);
-			odp_packet_free_multi(&pkt, 1);
-		}
-	}
-#else
-	for (i = 0; i < num_conf; i++) {
-		struct pp2_buff_inf	*binf;
-		binf = &shadow_q->buffs_inf[shadow_q->read_ind];
-		if (unlikely(!binf->cookie || !binf->addr)) {
-			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
-				shadow_q->read_ind, (u64)binf->cookie, (u64)binf->addr);
-			goto skip_buf;
-		}
-		pkt_hdr = odp_packet_hdr((odp_packet_t)((uintptr_t)binf->cookie | sys_dma_high_addr));
-		if (unlikely(!(pkt_hdr->input))) {
-			pkt = (odp_packet_t)((uintptr_t)binf->cookie | sys_dma_high_addr);
-			odp_packet_free_multi(&pkt, 1);
-			goto skip_buf;
-		}
-
-		memcpy(&buff_array[buf_index].buff, binf, sizeof(*binf));
-		buff_array[buf_index].bpool= get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool;
-		buf_index++;
-		num_bufs++;
-skip_buf:
-		shadow_q->read_ind++;
-		if (shadow_q->read_ind == MVPP2_Q_SIZE) {
-			shadow_q->read_ind = 0;
-			pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
-			num_bufs = 0;
-			buf_index = 0;
-		}
-	}
-	pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
-
-#endif /* USE_LPBK_SW_RECYLCE */
-#endif /* !USE_HW_BUFF_RECYLCE */
 
 	return num;
 }
