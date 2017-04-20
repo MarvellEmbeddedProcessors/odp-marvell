@@ -26,7 +26,8 @@ extern "C" {
 #define MVPP2_MAX_NUM_TCS_PER_PORT	1
 /* TODO: temporary set num-RxQs-per-tc according to #cores */
 #define MVPP2_MAX_NUM_QS_PER_TC		4
-#define MVPP2_Q_SIZE			1024
+#define MVPP2_RXQ_SIZE			512
+#define MVPP2_TXQ_SIZE			2048
 #define MVPP2_DFLT_MTU			1500
 
 #define MVPP2_PKT_PARSE_SUPPORT	1
@@ -163,7 +164,7 @@ extern "C" {
  * This controls the burst size on various enqueue, dequeue, etc calls. Large
  * burst size improves throughput, but may degrade QoS (increase latency).
  */
-#define CONFIG_BURST_SIZE 64
+#define CONFIG_BURST_SIZE 256
 
 #ifdef __cplusplus
 }
