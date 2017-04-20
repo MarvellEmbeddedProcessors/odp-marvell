@@ -33,7 +33,7 @@
 /*#define USE_HW_BUFF_RECYLCE*/
 #define MAX_NUM_QS_PER_CORE		MVPP2_MAX_NUM_TCS_PER_PORT
 #define MAX_NUM_PACKPROCS		1
-#define SHADOW_Q_SIZE			MVPP2_Q_SIZE
+#define SHADOW_Q_SIZE			MVPP2_TXQ_SIZE
 
 #define upper_32_bits(n) ((u32)(((n) >> 16) >> 16))
 #define lower_32_bits(n) ((u32)(n))
@@ -196,7 +196,7 @@ static int fill_bpool(odp_pool_t	 pool,
 	struct pp2_buff_inf	 buff_inf;
 #else
 	odp_packet_t		 *pkt;
-	struct buff_release_entry buff_array[MVPP2_Q_SIZE];
+	struct buff_release_entry buff_array[MVPP2_TXQ_SIZE];
 	int j = 0, err2 = 0;
 	u16 final_num, num_bufs;
 #endif
@@ -294,7 +294,7 @@ static int fill_bpool(odp_pool_t	 pool,
 		buff_array[j].buff.addr =
 			(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(odp_packet_head(pkt[i]));
 		j++;
-		if (j == MVPP2_Q_SIZE) {
+		if (j == MVPP2_TXQ_SIZE) {
 			num_bufs = j;
 			err2 = pp2_bpool_put_buffs(hif, buff_array, &num_bufs);
 			j = 0;
@@ -364,7 +364,7 @@ static int mvpp2_init_local(void)
 	snprintf(name, sizeof(name), "hif-%d", id + offs);
 	memset(&hif_params, 0, sizeof(hif_params));
 	hif_params.match = name;
-	hif_params.out_size = MVPP2_Q_SIZE;
+	hif_params.out_size = MVPP2_TXQ_SIZE;
 	err = pp2_hif_init(&hif_params, &thds[id].hif);
 	if (err != 0)
 		return err;
@@ -466,13 +466,13 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 		port_params.inqs_params.tcs_params[i].num_in_qs = MVPP2_MAX_NUM_QS_PER_TC;
 		memset(inq_params, 0, sizeof(inq_params));
 		for (j = 0; j < port_params.inqs_params.tcs_params[i].num_in_qs; j++)
-			inq_params[j].size = MVPP2_Q_SIZE;
+			inq_params[j].size = MVPP2_RXQ_SIZE;
 		port_params.inqs_params.tcs_params[i].inqs_params = inq_params;
 		port_params.inqs_params.tcs_params[i].pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
 	}
 	port_params.outqs_params.num_outqs = MVPP2_MAX_NUM_TCS_PER_PORT;
 	for (i = 0; i < port_params.outqs_params.num_outqs; i++) {
-		port_params.outqs_params.outqs_params[i].size = MVPP2_Q_SIZE;
+		port_params.outqs_params.outqs_params[i].size = MVPP2_TXQ_SIZE;
 		port_params.outqs_params.outqs_params[i].weight = 1;
 	}
 	err = pp2_ppio_init(&port_params, &pktio_entry->s.pkt_mvpp2.ppio);
