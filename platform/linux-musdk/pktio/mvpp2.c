@@ -86,7 +86,6 @@ struct inq_info {
 };
 
 static uint32_t		 used_bpools = MVPP2_BPOOL_RSRV;
-static uint64_t		 sys_dma_high_addr = (~0LL);
 
 /* Global lock used for control containers and other accesses */
 static odp_ticketlock_t thrs_lock;
@@ -192,7 +191,6 @@ static int fill_bpool(odp_pool_t	 pool,
 	odp_packet_hdr_t	*pkt_hdr;
 #ifndef USE_LPBK_SW_RECYLCE
 	odp_packet_t		 pkt;
-	static int		 first = 1;
 	struct pp2_buff_inf	 buff_inf;
 #else
 	odp_packet_t		 *pkt;
@@ -207,20 +205,6 @@ static int fill_bpool(odp_pool_t	 pool,
 		pkt = odp_packet_alloc(pool, alloc_len);
 		if (pkt == ODP_PACKET_INVALID) {
 			ODP_ERR("Allocated invalid pkt; skipping!\n");
-			continue;
-		}
-
-		if (first) {
-			odp_ticketlock_lock(&thrs_lock);
-			if (sys_dma_high_addr == (uint64_t)(~0LL)) {
-				sys_dma_high_addr = ((u64)pkt) & (~((1ULL << 32) - 1));
-				ODP_DBG("sys_dma_high_addr (0x%lx)\n", sys_dma_high_addr);
-			}
-			first = 0;
-			odp_ticketlock_unlock(&thrs_lock);
-		}
-		if ((upper_32_bits((u64)pkt)) != (sys_dma_high_addr >> 32)) {
-			ODP_ERR("pkt(%p)  upper out of range; skipping\n", pkt);
 			continue;
 		}
 
@@ -258,21 +242,9 @@ static int fill_bpool(odp_pool_t	 pool,
 		goto err;
 	}
 
-	odp_ticketlock_lock(&thrs_lock);
-	if (sys_dma_high_addr == (uint64_t)(~0LL)) {
-		sys_dma_high_addr = ((u64)pkt[i]) & (~((1ULL << 32) - 1));
-		ODP_DBG("sys_dma_high_addr (0x%lx)\n", sys_dma_high_addr);
-	}
-	odp_ticketlock_unlock(&thrs_lock);
-
 	for (; i < final_num; i++) {
 		if (pkt[i] == ODP_PACKET_INVALID) {
 			ODP_ERR("Allocated invalid pkt; skipping!\n");
-			continue;
-		}
-
-		if ((upper_32_bits((u64)pkt[i])) != (sys_dma_high_addr >> 32)) {
-			ODP_ERR("pkt(%p)  upper out of range; skipping\n", pkt[i]);
 			continue;
 		}
 
@@ -729,7 +701,7 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 			} else {
 				odp_packet_t pkt;
 
-				pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie | sys_dma_high_addr);
+				pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
 				odp_packet_free_multi(&pkt, 1);
 			}
 		}
@@ -749,7 +721,7 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 				goto skip_buf;
 			}
 			if (unlikely(!(entry->bpool))) {
-				odp_packet_t pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie | sys_dma_high_addr);
+				odp_packet_t pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
 
 				odp_packet_free_multi(&pkt, 1);
 				goto skip_buf;
@@ -809,8 +781,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			num = CONFIG_BURST_SIZE;
 		pp2_ppio_recv(pktio_entry->s.pkt_mvpp2.ppio, tc, qid, descs, &num);
 		for (i = 0; i < num; i++, total_got++) {
-			pkt_table[total_got] = (odp_packet_t)((uintptr_t)pp2_ppio_inq_desc_get_cookie(&descs[i]) |
-						sys_dma_high_addr);
+			pkt_table[total_got] = (odp_packet_t)pp2_ppio_inq_desc_get_cookie(&descs[i]);
 			len = pp2_ppio_inq_desc_get_pkt_len(&descs[i]);
 #if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
 			pp2_ppio_inq_desc_get_l3_info(&descs[i], &l3_type, &l3_offset);
