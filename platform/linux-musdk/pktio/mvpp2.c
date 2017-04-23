@@ -768,7 +768,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 {
 	odp_packet_hdr_t	*pkt_hdr;
 	odp_packet_t		 pkt;
-	struct pp2_ppio_desc	 descs[CONFIG_BURST_SIZE];
+	struct pp2_ppio_desc	 descs[MVPP2_MAX_RX_BURST_SIZE];
 	u16			 i, num, total_got, len;
 #if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
 	enum pp2_inq_l3_type	 l3_type;
@@ -778,8 +778,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	u8			 tc, qid, first_qid, num_qids;
 
 	total_got = 0;
-	if (num_pkts > (CONFIG_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_TC))
-		num_pkts = CONFIG_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_TC;
+	if (num_pkts > (MVPP2_MAX_RX_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_TC))
+		num_pkts = MVPP2_MAX_RX_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_TC;
 
 	if (!inqs[rxq_id].lockless)
 		odp_ticketlock_lock(&inqs[rxq_id].lock);
@@ -790,8 +790,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	num_qids = inqs[rxq_id].num_qids;
 	for (qid = first_qid; qid < (first_qid + num_qids) && (total_got != num_pkts); qid++) {
 		num = num_pkts - total_got;
-		if (num > CONFIG_BURST_SIZE)
-			num = CONFIG_BURST_SIZE;
+		if (num > MVPP2_MAX_RX_BURST_SIZE)
+			num = MVPP2_MAX_RX_BURST_SIZE;
 		pp2_ppio_recv(pktio_entry->s.pkt_mvpp2.ppio, tc, qid, descs, &num);
 		for (i = 0; i < num; i++, total_got++) {
 			pkt_table[total_got] = (odp_packet_t)pp2_ppio_inq_desc_get_cookie(&descs[i]);
@@ -844,11 +844,11 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	struct tx_shadow_q	*shadow_q;
 	u16			 shadow_q_free_size;
 #endif /* !USE_HW_BUFF_RECYLCE */
-	struct pp2_ppio_desc	 descs[CONFIG_BURST_SIZE];
+	struct pp2_ppio_desc	 descs[MVPP2_MAX_TX_BURST_SIZE];
 	dma_addr_t		 pa;
-	u16			 i, num, len;
+	u16			 i, num, len, idx = 0;
 	u8			 tc;
-	int			 err;
+	int			 err, sent = 0;
 	pkt_mvpp2_t		*pkt_mvpp2 = &pktio_entry->s.pkt_mvpp2;
 
 	/* TODO: only support now RSS; no support for QoS; how to translate txq_id to tc/hif???? */
@@ -869,21 +869,15 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	}
 #endif /* !USE_HW_BUFF_RECYLCE */
 
-	num = num_pkts;
-	if (num > CONFIG_BURST_SIZE)
-		num = CONFIG_BURST_SIZE;
-
-	for (i = 0; i < num; i++) {
+	for (i = 0; i < num_pkts; i++) {
 		pkt = pkt_table[i];
-		if (!pkt)
-			continue;
 		len = odp_packet_len(pkt);
 		pkt_hdr = odp_packet_hdr(pkt);
 		pa = mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(pkt)));
-		pp2_ppio_outq_desc_reset(&descs[i]);
-		pp2_ppio_outq_desc_set_phys_addr(&descs[i], pa);
-		pp2_ppio_outq_desc_set_pkt_offset(&descs[i], odp_packet_headroom(pkt));
-		pp2_ppio_outq_desc_set_pkt_len(&descs[i], len);
+		pp2_ppio_outq_desc_reset(&descs[idx]);
+		pp2_ppio_outq_desc_set_phys_addr(&descs[idx], pa);
+		pp2_ppio_outq_desc_set_pkt_offset(&descs[idx], odp_packet_headroom(pkt));
+		pp2_ppio_outq_desc_set_pkt_len(&descs[idx], len);
 
 #if defined(MVPP2_CSUM_OFF_SUPPORT) && (MVPP2_CSUM_OFF_SUPPORT == 1)
 		/* Update the slot for csum_offload */
@@ -895,7 +889,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 			if (odp_likely((l3_type != PP2_OUTQ_L3_TYPE_OTHER) &&
 				       (pkt_hdr->p.l4_offset != ODP_PACKET_OFFSET_INVALID))) {
 				if (odp_likely(pkt_hdr->p.input_flags.tcp))
-					pp2_ppio_outq_desc_set_proto_info(&descs[i],
+					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
 									  l3_type,
 									  PP2_OUTQ_L4_TYPE_TCP,
 									  pkt_hdr->p.l3_offset,
@@ -903,7 +897,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 									  1,
 									  1);
 				else if (odp_likely(pkt_hdr->p.input_flags.udp))
-					pp2_ppio_outq_desc_set_proto_info(&descs[i],
+					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
 									  l3_type,
 									  PP2_OUTQ_L4_TYPE_UDP,
 									  pkt_hdr->p.l3_offset,
@@ -911,7 +905,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 									  1,
 									  1);
 				else
-					pp2_ppio_outq_desc_set_proto_info(&descs[i],
+					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
 									  l3_type,
 									  PP2_OUTQ_L4_TYPE_OTHER,
 									  pkt_hdr->p.l3_offset,
@@ -923,8 +917,8 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 #endif /* defined(MVPP2_CSUM_OFF_SUPPORT) && ... */
 
 #ifdef USE_HW_BUFF_RECYLCE
-		pp2_ppio_outq_desc_set_cookie(&descs[i], lower_32_bits((u64)(uintptr_t)pkt));
-		pp2_ppio_outq_desc_set_pool(&descs[i], pktio_entry->s.pkt_mvpp2.bpool);
+		pp2_ppio_outq_desc_set_cookie(&descs[idx], lower_32_bits((u64)(uintptr_t)pkt));
+		pp2_ppio_outq_desc_set_pool(&descs[idx], pktio_entry->s.pkt_mvpp2.bpool);
 #else
 		shadow_q->ent[shadow_q->write_ind].buff.cookie = lower_32_bits((u64)(uintptr_t)pkt);
 		shadow_q->ent[shadow_q->write_ind].buff.addr = pa;
@@ -933,12 +927,20 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		shadow_q->write_ind = (shadow_q->write_ind + 1) & SHADOW_Q_MAX_SIZE_MASK;
 		shadow_q->size++;
 #endif /* USE_HW_BUFF_RECYLCE */
+		idx++;
+		if (odp_unlikely(idx == MVPP2_MAX_TX_BURST_SIZE)) {
+			num = idx;
+			err = pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &num);
+			sent += num;
+			if ((idx != num) || (err != 0))
+				return sent;
+			idx = 0;
+		}
 	}
-	err = pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &num);
-	if (num && (err != 0))
-		return 0;
+	err = pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &idx);
+	sent += idx;
 
-	return num;
+	return sent;
 }
 
 const pktio_if_ops_t mvpp2_pktio_ops = {
