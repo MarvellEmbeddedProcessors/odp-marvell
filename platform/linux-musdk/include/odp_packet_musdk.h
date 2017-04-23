@@ -25,6 +25,16 @@ struct tx_shadow_q {
 	struct buff_release_entry	 ent[SHADOW_Q_MAX_SIZE];/* queue entries */
 };
 
+struct inq_info {
+	u8			 first_tc;
+	u8			 num_tcs;
+	u8			 first_qid;
+	u8			 next_qid;
+	u8			 num_qids;
+	int			 lockless;
+	odp_ticketlock_t	 lock;  /**< Queue lock */
+};
+
 typedef struct {
 	uint16_t		 pp_id;
 	uint16_t		 ppio_id;
@@ -40,7 +50,9 @@ typedef struct {
 	unsigned char		 if_mac[ETH_ALEN];	/**< eth mac address */
 	int			 sockfd;
 	odp_pktio_capability_t	 capa;	/**< interface capabilities */
+	int			 num_out_queues;
 	struct tx_shadow_q	 shadow_qs[MVPP2_TOTAL_NUM_HIFS][MAX_NUM_OUTQS_PER_CORE];
+	struct inq_info		 inqs[MVPP2_MAX_NUM_QS_PER_TC];
 } pkt_mvpp2_t;
 
 #endif /* ODP_PACKET_MUSDK_H_ */
