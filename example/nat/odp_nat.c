@@ -79,6 +79,8 @@
 
 #define MAX_STRING  			32
 
+#define ODP_NAT_AGING_ENABLE 	1
+
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
 			    strrchr((file_name), '/') + 1 : (file_name))
@@ -135,7 +137,7 @@ typedef struct {
 
 	uint32_t aging_time; /* aging time for DNAT entries */
 	int dsa_mode;
-	int debug_mode;
+	int print_table;
 	uint16_t lan_vid;
 	uint16_t wan_vid[ODP_NAT_MAX_WAN_IP];
 	int src_dev_id;
@@ -165,6 +167,7 @@ typedef struct nat_entry_t {
 	uint32_t     	target_ip; 	/* For SNAT, it is source ip, for DNAT, it is dest ip */
 	struct nat_entry_t *reverse_nat_entry;
 	uint32_t     	valid;
+	uint32_t		counter;
 } nat_entry_t;
 
 /**
@@ -457,11 +460,8 @@ static odph_nat_wan_pool_t* ip_table_lookup_pool(uint32_t ip)
 	int k;
 	ip_mapping_entry_t *iptbl;
 
-	//printf("ip_table_lookup: ip = %08x\n", ip);
 	for (k = 0; k < IP_MAP_TBL_SIZE; k++) {
 		iptbl = &gbl_args->ip_map_tbl[k];
-		//printf("ip_table_add_entry: %d %08x %08x %08x %08x <- %d\n", iptbl->valid, iptbl->local_subnet, iptbl->local_mask, iptbl->public_subnet, iptbl->public_mask, k);
-
 		if (iptbl->valid && ((ip & iptbl->local_mask) == (iptbl->local_subnet & iptbl->local_mask))) {
 			return (iptbl->pool);
 		}
@@ -492,8 +492,6 @@ static void ip_table_add_entry(uint32_t subnet, uint32_t mask, uint32_t public_s
 			       ipv4_str(subnet_str, &subnet), ipv4_str(mask_str, &mask),
 			       ipv4_str(pub_subnet_str, &public_subnet),
 			       ipv4_str(pub_mask_str, &public_mask), k);
-//		printf("ip_table_add_entry: %08x %08x %08x %08x -> %d\n",
-//				subnet, mask, public_subnet, public_mask, k);
 			break;
 		}
 	}
@@ -511,11 +509,14 @@ static nat_entry_t* dnat_tbl_add_entry(ipv4_5tuple_t* ipv4_5tuple, uint32_t targ
 	for (i = 0; i < NAT_TBL_DEPTH; i++) {
 		odp_rwlock_write_lock(&gbl_args->dnat_lock);
 		entry = &gbl_args->dnat_tbl[hash_index][i];
-
 		if (entry->valid) {
 			odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 			if (0 == memcmp(ipv4_5tuple, &entry->ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
+				entry->counter = 0;
+				odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 				return entry;
+			} else {
+				odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 			}
 		} else {
 			entry->valid = 1;
@@ -523,6 +524,7 @@ static nat_entry_t* dnat_tbl_add_entry(ipv4_5tuple_t* ipv4_5tuple, uint32_t targ
 			entry->target_ip = target_ip;
 			entry->target_port = port;
 			entry->reverse_nat_entry = snat_ptr;
+			entry->counter = 0;
 			odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 			return entry;
 		}
@@ -628,17 +630,6 @@ static int process_tocpu_lan(odp_packet_t pkt)
         return 1;
     }
 
-    if (gbl_args->appl.debug_mode) {
-        int j;
-        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
-        printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
-
-        for (j = 0; j < 64; j++) {
-            printf("%02x ", data[j]);
-        }
-        printf("\n");
-    }
-
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
         return 2;
     else
@@ -677,17 +668,6 @@ static int process_tocpu_wan(odp_packet_t pkt)
         return 1;
     }
 
-    if (gbl_args->appl.debug_mode) {
-        int j;
-        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
-        printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
-
-        for (j = 0; j < 64; j++) {
-            printf("%02x ", data[j]);
-        }
-        printf("\n");
-    }
-
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
         return 2;
     else
@@ -701,12 +681,12 @@ static int process_fromcpu_lan(odp_packet_t pkt)
     odph_ethaddr_t macaddr[2];
 
     memset(&dsaFill, 0,sizeof(odph_dsa_t));
-    // bit[31,30]:11 (forward), bit[28:24]:01000 (src_dev)
+    /* bit[31,30]:11 (forward), bit[28:24]:01000 (src_dev) */
     dsaFill.src_dev = 0xC0;
     dsaFill.src_dev |= gbl_args->appl.src_dev_id & DEV_ID_MASK;
-    // bit[23,19]:63(src_port),
+    /* bit[23,19]:63(src_port) */
     dsaFill.src_port = DSA_SRC_PORT_CPU << 3;
-    dsaFill.resv1 = 0x20; //This is Bit 5 of src port
+    dsaFill.resv1 = 0x20;
     dsaFill.vid  = htons((1 << 12) | gbl_args->appl.lan_vid);
 
     pktio.tx_idx = 0;
@@ -728,17 +708,6 @@ static int process_fromcpu_lan(odp_packet_t pkt)
         return 1;
     }
 
-    if (gbl_args->appl.debug_mode) {
-        int j;
-        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
-        printf("Sending to %s\n", gbl_args->appl.if_names[pktio.tx_idx]);
-
-        for (j = 0; j < 64; j++) {
-            printf("%02x ", data[j]);
-        }
-        printf("\n");
-    }
-
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
         return 2;
     else
@@ -753,12 +722,12 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
     int tx_idx;
 
     memset(&dsaFill, 0,sizeof(odph_dsa_t));
-    // bit[31,30]:11 (forward), bit[28:24]:01000 (src_dev)
+    /* bit[31,30]:11 (forward), bit[28:24]:01000 (src_dev) */
     dsaFill.src_dev = 0xC0;
     dsaFill.src_dev |= gbl_args->appl.src_dev_id & DEV_ID_MASK;
-    // bit[23,19]:63(src_port),
+    /* bit[23,19]:63(src_port) */
     dsaFill.src_port = DSA_SRC_PORT_CPU << 3;
-    dsaFill.resv1 = 0x20; //This is Bit 5 of src port
+    dsaFill.resv1 = 0x20;
     dsaFill.vid  = htons((1 << 12) | gbl_args->appl.wan_vid[rx_pktio->rx_idx - gbl_args->appl.if_phy_count - 1]);
 
     tx_idx = gbl_args->appl.if_phy_count - 1;
@@ -780,17 +749,6 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
 
     if (odp_packet_copy_from_mem(pkt, 2 * sizeof(odph_ethaddr_t), sizeof(odph_dsa_t), &dsaFill) != 0) {
         return 1;
-    }
-
-    if (gbl_args->appl.debug_mode) {
-        int j;
-        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
-        printf("Sending to %s\n", gbl_args->appl.if_names[pktio.tx_idx]);
-
-        for (j = 0; j < 64; j++) {
-            printf("%02x ", data[j]);
-        }
-        printf("\n");
     }
 
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
@@ -852,7 +810,6 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 			snat_ipv4.src_port = ntohs(udphdr->src_port);
 			snat_ipv4.dst_port = ntohs(udphdr->dst_port);
 		} else {
-			//Only handle echo request and reply
 			if ((icmphdr->type != 8) &&  (icmphdr->type != 0))
 				return 1;
 			if (icmphdr->code)
@@ -866,14 +823,11 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 		for (j = 0; j < NAT_TBL_DEPTH; j++) {
 		    odp_rwlock_write_lock(&gbl_args->snat_lock);
 			if (tbl[hash_index][j].valid) {
-				odp_rwlock_write_unlock(&gbl_args->snat_lock);
-				// Already there
 				if (0 == memcmp(&snat_ipv4, &tbl[hash_index][j].ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
-					if (gbl_args->appl.debug_mode)
-						printf("Found in snat table: %08x %d %08x %d %d %08x -> %d %d\n", snat_ipv4.src_ip, snat_ipv4.src_port, snat_ipv4.dst_ip, snat_ipv4.dst_port, snat_ipv4.protocol, tbl[hash_index][j].target_ip, hash_index, j);
-
+					tbl[hash_index][j].counter = 0;
+					tbl[hash_index][j].reverse_nat_entry->counter = 0;
 					if (tbl[hash_index][j].target_ip) {
-
+						odp_rwlock_write_unlock(&gbl_args->snat_lock);
 						switch (snat_ipv4.protocol) {
 							case ODPH_IPPROTO_UDP:
 								ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
@@ -904,18 +858,19 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 #if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
 						odph_ipv4_csum_update(pkt);
 #endif
+					} else {
+						odp_rwlock_write_unlock(&gbl_args->snat_lock);
 					}
 					break;
+				} else {
+					odp_rwlock_write_unlock(&gbl_args->snat_lock);
 				}
 			} else {
 				odph_nat_wan_pool_t* port_pool = NULL;
 
-				//odp_rwlock_write_unlock(&gbl_args->snat_lock);
 				// First packet, Found empty position
 				// 1. Search the IP mapping entry
 				tbl[hash_index][j].target_ip = ip_table_lookup(snat_ipv4.src_ip);
-				//printf("tbl[hash_index][j].target_ip=0x%x\n", tbl[hash_index][j].target_ip);
-
 				// No match in IP table, probably control plane packets, drop it
 				if (!tbl[hash_index][j].target_ip) {
 					odp_rwlock_write_unlock(&gbl_args->snat_lock);
@@ -924,6 +879,7 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				// 2. Add into SNAT table
 				tbl[hash_index][j].valid = 1;
 				tbl[hash_index][j].ipv4_5tuple = snat_ipv4;
+				tbl[hash_index][j].counter = 0;
 				// Modify the local source port to public source port
 				port_pool = ip_table_lookup_pool(snat_ipv4.src_ip);
 				switch (snat_ipv4.protocol) {
@@ -941,10 +897,6 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				}
 				odp_rwlock_write_unlock(&gbl_args->snat_lock);
 
-				//if (j > 1)
-				if (gbl_args->appl.debug_mode)
-					printf("add to snat table: %08x %d %08x %d %d %08x -> %d %d\n", snat_ipv4.src_ip, snat_ipv4.src_port, snat_ipv4.dst_ip, snat_ipv4.dst_port, snat_ipv4.protocol, tbl[hash_index][j].target_ip, hash_index, j);
-
 				if (tbl[hash_index][j].target_ip) {
 					// 3. Add into DNAT table
 					dnat_ipv4.src_ip = snat_ipv4.dst_ip;
@@ -953,15 +905,11 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 					dnat_ipv4.protocol = snat_ipv4.protocol;
 					dnat_ipv4.dst_ip = tbl[hash_index][j].target_ip;
 					if (snat_ipv4.protocol == ODPH_IPPROTO_ICMP) {
-						dnat_ipv4.src_port = tbl[hash_index][j].target_port; //ID
+						dnat_ipv4.src_port = tbl[hash_index][j].target_port;
 						dnat_ipv4.dst_port = 0;
 					}
 
 					tbl[hash_index][j].reverse_nat_entry = dnat_tbl_add_entry(&dnat_ipv4, snat_ipv4.src_ip, snat_ipv4.src_port, &tbl[hash_index][j]);
-					if (gbl_args->appl.debug_mode) {
-						printf("add to dnat table: %08x %d %08x %d %d %08x -> %p\n", dnat_ipv4.src_ip, dnat_ipv4.src_port, dnat_ipv4.dst_ip, dnat_ipv4.dst_port, dnat_ipv4.protocol, snat_ipv4.src_ip, tbl[hash_index][j].reverse_nat_entry);
-						printf("Chaning src IP from %08x to %08x, src port to %d\n", ipv4hdr->src_addr, ntohl(tbl[hash_index][j].target_ip), ntohs(tbl[hash_index][j].target_port));
-					}
 
 					// 4. DO NAT
 					switch (snat_ipv4.protocol) {
@@ -1042,7 +990,6 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 			ipv4.src_port = ntohs(udphdr->src_port);
 			ipv4.dst_port = ntohs(udphdr->dst_port);
 		} else {
-			//Only handle echo request and reply
 			if ((icmphdr->type != 8) &&  (icmphdr->type != 0))
 				return 1;
 			if (icmphdr->code)
@@ -1054,24 +1001,27 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 		hash_index = XXH32((void*)&ipv4, sizeof(ipv4_5tuple_t), NAT_HASH_SEED) & (NAT_TBL_SIZE - 1);
 
 		for (j = 0; j < NAT_TBL_DEPTH; j++) {
+			odp_rwlock_write_lock(&gbl_args->dnat_lock);
 			if (tbl[hash_index][j].valid) {
 				if (0 == memcmp(&ipv4, &tbl[hash_index][j].ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
-					if (gbl_args->appl.debug_mode)
-						printf("Found in dnat table: %08x %d %08x %d %d %08x -> %d %d\n", ipv4.src_ip, ipv4.src_port, ipv4.dst_ip, ipv4.dst_port, ipv4.protocol, tbl[hash_index][j].target_ip, hash_index, j);
 					target_ip = tbl[hash_index][j].target_ip;
 					target_port = tbl[hash_index][j].target_port;
+					tbl[hash_index][j].counter = 0;
+					tbl[hash_index][j].reverse_nat_entry->counter = 0;
+					odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 					break;
+				} else {
+					odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 				}
-			} else
+			} else {
+				odp_rwlock_write_unlock(&gbl_args->dnat_lock);
 				break;
+			}
 		}
 		if (odp_unlikely((j == NAT_TBL_DEPTH) || (!tbl[hash_index][j].valid))) {
-			if (gbl_args->appl.debug_mode)
-				printf("Not found in dnat table: %08x %d %08x %d %d %d -> %d %d\n", ipv4.src_ip, ipv4.src_port, ipv4.dst_ip, ipv4.dst_port, ipv4.protocol, tbl[hash_index][j].valid, hash_index, j);
 			return 1;
 		}
-		if (gbl_args->appl.debug_mode)
-			printf("Changing dst address from %08x to %08x\n", ipv4hdr->dst_addr, htonl(target_ip));
+
 		switch (ipv4.protocol) {
 			case ODPH_IPPROTO_UDP:
 				ipv4hdr->dst_addr = htonl(target_ip);
@@ -1162,58 +1112,26 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 		if (num - i > PREFETCH_SHIFT)
 			odp_packet_prefetch(pkt_tbl[i + PREFETCH_SHIFT], ODPH_ETHHDR_LEN, ODPH_IPV4HDR_LEN + 12);
 
-		if (gbl_args->appl.debug_mode) {
-			int j;
-			uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
-			printf("Rx from interface %s\n", gbl_args->appl.if_names[pktio->rx_idx]);
-
-			for (j = 0; j < 64; j++) {
-				printf("%02x ", data[j]);
-			}
-			printf("\n");
-		}
-
         switch (get_pkt_type(pkt, pktio)) {
             case DATA_PLANE_FROM_LAN:
-                if (gbl_args->appl.debug_mode) {
-                    printf("It is DATA_PLANE_FROM_LAN\n");
-                }
                 proceed = do_snat(pkt, gbl_args->snat_tbl);
                 break;
             case DATA_PLANE_FROM_WAN:
-                if (gbl_args->appl.debug_mode) {
-                    printf("It is DATA_PLANE_FROM_WAN\n");
-                }
                 proceed = do_dnat(pkt, gbl_args->dnat_tbl);
                 break;
             case CONTROL_PLANE_TO_CPU_LAN:
-                if (gbl_args->appl.debug_mode) {
-                    printf("It is CONTROL_PLANE_TO_CPU_LAN\n");
-                }
                 proceed = process_tocpu_lan(pkt);
                 break;
             case CONTROL_PLANE_TO_CPU_WAN:
-                if (gbl_args->appl.debug_mode) {
-                    printf("It is CONTROL_PLANE_TO_CPU_WAN\n");
-                }
                 proceed = process_tocpu_wan(pkt);
                 break;
             case CONTROL_PLANE_FROM_CPU_LAN:
-                if (gbl_args->appl.debug_mode) {
-                    printf("It is CONTROL_PLANE_FROM_CPU_LAN\n");
-                }
                 proceed = process_fromcpu_lan(pkt);
                 break;
             case CONTROL_PLANE_FROM_CPU_WAN:
-                if (gbl_args->appl.debug_mode) {
-                    printf("It is CONTROL_PLANE_FROM_CPU_WAN\n");
-                }
                 proceed = process_fromcpu_wan(pkt, pktio);
                 break;
             default:
-                if (gbl_args->appl.debug_mode) {
-                    printf("It is UNKNOWN TYPE\n");
-                }
                 odp_packet_free(pkt);
                 break;
         }
@@ -1221,34 +1139,55 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
         switch (proceed) {
             case 0:
                 send_pkt_tbl[sent++] = pkt;
-                if (gbl_args->appl.debug_mode) {
-                    int j;
-                    uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
-                    printf("After processing:\n");
-
-                    for (j = 0; j < 64; j++) {
-                        printf("%02x ", data[j]);
-                    }
-                    printf("\n");
-                    printf("Sending to  %s\n", gbl_args->appl.if_names[pktio->tx_idx]);
-                }
                 break;
             case 1:
                 odp_packet_free(pkt);
-                if (gbl_args->appl.debug_mode)
-                printf("Dropped\n");
                 break;
             case 2:
-                if (gbl_args->appl.debug_mode)
-                printf("Sent to Control Plane\n");
-                default:
+            default:
                 break;
         }
 	}
 
 	if (sent)
 		sent = odp_pktout_send(pktio->pktout, send_pkt_tbl, sent);
+
 	return sent;
+}
+
+static void print_nat_table(nat_entry_t nat_tbl[][NAT_TBL_DEPTH], unsigned int tbl_size, unsigned int tbl_depth, odp_rwlock_t *nat_lock, const char *msg)
+{
+	unsigned int i, j, num_entries = 0;
+	unsigned int ip;
+
+	printf("\t %s\n", msg);
+	printf("\t Hash   Dep  Src IP       PRT   Dest IP      PRT   Prtcl  Target IP    PRT   TimeStamp   \n");
+	printf("\t ----------------------------------------------------------------------------------------\n");
+	for(i=0; i<tbl_size; i++)
+	{
+		for(j=0; j<tbl_depth; j++)
+		{
+			if(nat_tbl[i][j].valid)
+			{
+				printf("\t %05X  %3X  ", i, j);
+				ip = nat_tbl[i][j].ipv4_5tuple.src_ip;
+				printf("%02X.%02X.%02X.%02X  ", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff, (ip >> 0) & 0xff);
+				printf("%04X  ", nat_tbl[i][j].ipv4_5tuple.src_port);
+				ip = nat_tbl[i][j].ipv4_5tuple.dst_ip;
+				printf("%02X.%02X.%02X.%02X  ", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff, (ip >> 0) & 0xff);
+				printf("%04X  ", nat_tbl[i][j].ipv4_5tuple.dst_port);
+				printf("%02X     ", nat_tbl[i][j].ipv4_5tuple.protocol);
+				ip = nat_tbl[i][j].target_ip;
+				printf("%02X.%02X.%02X.%02X  ", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff, (ip >> 0) & 0xff);
+				printf("%04X  ", nat_tbl[i][j].target_port);
+				printf("%d\n", nat_tbl[i][j].counter);
+				num_entries ++;
+			}
+		}
+	}
+	printf("\t ----------------------------------------------------------------------------------------\n");
+	printf("\t number of entries: %d\n\n", num_entries);
+	return;
 }
 
 /**
@@ -1311,7 +1250,7 @@ static int run_worker(void *arg)
 		}
 
 		sent = process_pkt(pkt_tbl, pkts, cur_pktio);
-		sent     = odp_unlikely(sent < 0) ? 0 : sent;
+		sent = odp_unlikely(sent < 0) ? 0 : sent;
 		tx_drops = pkts - sent;
 
 		if (odp_unlikely(tx_drops)) {
@@ -1434,6 +1373,94 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	gbl_args->pktios[idx].pktio        = pktio;
 
 	return 0;
+}
+
+static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
+	     int duration, int timeout, int aging_enable)
+{
+	uint64_t pkts = 0;
+	uint64_t pkts_prev = 0;
+	uint64_t pps;
+	uint64_t rx_drops, tx_drops;
+	uint64_t maximum_pps = 0;
+	int i, j;
+	int elapsed = 0;
+	int stats_enabled = 1;
+	int loop_forever = (duration == 0);
+	int dump_interval = 20;
+
+	if(dump_interval <= 0 )
+		dump_interval = 1;
+
+	if (timeout <= 0) {
+		stats_enabled = 0;
+		gbl_args->appl.print_table = 0;
+		timeout = 1;
+	}
+
+	/* Wait for all threads to be ready*/
+	odp_barrier_wait(&barrier);
+
+	do {
+		sleep(timeout);
+		if(aging_enable)
+		{
+			for(i=0; i<NAT_TBL_SIZE; i++)
+			{
+				for(j=0; j<NAT_TBL_DEPTH; j++)
+				{
+					odp_rwlock_write_lock(&gbl_args->snat_lock);
+					if(gbl_args->snat_tbl[i][j].valid)
+					{
+						gbl_args->snat_tbl[i][j].counter ++;
+						gbl_args->snat_tbl[i][j].reverse_nat_entry->counter ++;
+						if(gbl_args->snat_tbl[i][j].counter >=	gbl_args->appl.aging_time)
+						{
+							gbl_args->snat_tbl[i][j].reverse_nat_entry->valid = 0;
+							gbl_args->snat_tbl[i][j].valid = 0;
+						}
+					}
+					odp_rwlock_write_unlock(&gbl_args->snat_lock);
+				}
+			}
+			if((gbl_args->appl.print_table == 1) && (elapsed % dump_interval == 0))
+			{
+				print_nat_table(gbl_args->snat_tbl, NAT_TBL_SIZE, NAT_TBL_DEPTH, &gbl_args->snat_lock, "SNAT Table Dump");
+				print_nat_table(gbl_args->dnat_tbl, NAT_TBL_SIZE, NAT_TBL_DEPTH, &gbl_args->dnat_lock, "DNAT Table Dump");
+			}
+		}
+
+		if (stats_enabled) {
+			pkts = 0;
+			rx_drops = 0;
+			tx_drops = 0;
+
+			for (i = 0; i < num_workers; i++) {
+				pkts += thr_stats[i].s.packets;
+				rx_drops += thr_stats[i].s.rx_drops;
+				tx_drops += thr_stats[i].s.tx_drops;
+			}
+
+			pps = (pkts - pkts_prev) / timeout;
+			if (pps > maximum_pps)
+				maximum_pps = pps;
+			printf("%" PRIu64 " pps, %" PRIu64 " max pps, ",  pps,
+			       maximum_pps);
+
+			printf(" %" PRIu64 " rx drops, %" PRIu64 " tx drops\n",
+			       rx_drops, tx_drops);
+
+			pkts_prev = pkts;
+		}
+
+		elapsed += timeout;
+	} while (loop_forever || (elapsed < duration));
+
+	if (stats_enabled)
+		printf("TEST RESULT: %" PRIu64 " maximum packets per second.\n",
+		       maximum_pps);
+
+	return pkts > 100 ? 0 : -1;
 }
 
 /**
@@ -1743,7 +1770,7 @@ static void usage(char *progname)
 	       "  -c, --count <number> CPU count.\n"
 	       "  -a, --accuracy <number> Time in seconds get print statistics\n"
 	       "                          (default is 1 second).\n"
-	       "  -g, --debug debug mode\n"
+	       "  -p, --print NAT table\n"
 	       "  -h, --help           Display help and exit.\n\n"
 	       "\n", NO_PATH(progname), NO_PATH(progname), NO_PATH(progname), NO_PATH(progname), MAX_PKTIOS
 	    );
@@ -1774,12 +1801,12 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"lan_vid", required_argument, NULL, 'l'},
 		{"wan_vid", required_argument, NULL, 'w'},
 		{"dsa", no_argument, NULL, 's'},
-		{"debug", no_argument, NULL, 'g'},
+		{"print", no_argument, NULL, 'p'},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts =  "+c:+a:i:d:o:l:w:shg";
+	static const char *shortopts =  "+c:+a:i:d:o:l:w:shp";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
 	odph_parse_options(argc, argv, shortopts, longopts);
@@ -1788,6 +1815,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	appl_args->accuracy = 1; /* get and print pps stats second */
 	appl_args->error_check = 0; /* don't check packet errors by default */
 	appl_args->dsa_mode = 0;
+	appl_args->aging_time = 300; /*default ageout time*/
 
 	opterr = 0; /* do not issue errors on helper options */
 	while (1) {
@@ -1821,8 +1849,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 			strcpy(appl_args->if_str, optarg);
 			for (token = strtok(optarg, ","), i = 0;
 			     (token != NULL) && (i < ODP_NAT_MAX_ETH_IF);
-			     token = strtok(NULL, ","), i++)
-				;
+			     token = strtok(NULL, ","), i++);
 
 			appl_args->if_phy_count = i;
 			if (appl_args->if_phy_count < 1 ||
@@ -1908,8 +1935,8 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
             appl_args->if_wan_count = i;
             break;
 
-		case 'g':
-			appl_args->debug_mode = 1;
+		case 'p':
+			appl_args->print_table = 1;
 			break;
 
 		case 'h':
@@ -1973,7 +2000,6 @@ static void print_info(char *progname, appl_args_t *appl_args)
 	for (i = 0; i < appl_args->if_count; ++i)
 		printf(" %s", appl_args->if_names[i]);
     printf("\n");
-    printf("Debug Mode %s\n", appl_args->debug_mode ? "Enabled" : "Disabled");
     printf("DSA Mode %s\n", appl_args->dsa_mode ? "Enabled" : "Disabled");
     if (appl_args->dsa_mode) {
         printf ("LAN VID: %d\n", appl_args->lan_vid);
@@ -2158,8 +2184,8 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	ret = print_speed_stats(num_workers, stats, gbl_args->appl.time,
-				gbl_args->appl.accuracy);
+	ret = nat_aging_and_stats(num_workers, stats, gbl_args->appl.time,
+				gbl_args->appl.accuracy, ODP_NAT_AGING_ENABLE);
 
 	exit_threads = 1;
 
