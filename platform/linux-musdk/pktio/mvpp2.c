@@ -175,7 +175,7 @@ static int mvpp2_free_buf(odp_buffer_t buf)
 	buff_inf.cookie =
 			lower_32_bits((u64)(uintptr_t)pkt); /* cookie contains lower_32_bits of the va */
 	buff_inf.addr   =
-		(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(pkt_hdr);
+		(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
 	err = pp2_bpool_put_buff(hif, get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool, &buff_inf);
 
 	return err;
