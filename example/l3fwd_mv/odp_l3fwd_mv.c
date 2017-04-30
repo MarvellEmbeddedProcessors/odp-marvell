@@ -13,6 +13,7 @@
 
 #include <test_debug.h>
 
+#include <odp_debug_internal.h>
 #include <odp_api.h>
 #include <odp/helper/linux.h>
 #include <odp/helper/eth.h>
@@ -1333,6 +1334,15 @@ int main(int argc, char **argv)
 	nb_worker = MAX_NB_WORKER;
 	if (args->worker_count)
 		nb_worker = args->worker_count;
+
+	//WA: don't reserve CPU for control plan and Linux
+	odp_cpumask_zero(&odp_global_data.worker_cpus);
+	odp_cpumask_zero(&odp_global_data.control_cpus);
+	odp_cpumask_set(&odp_global_data.control_cpus, 0);
+	for (i = 0; i < odp_global_data.num_cpus_installed; i++) {
+		odp_cpumask_set(&odp_global_data.worker_cpus, i);
+	}
+
 	nb_worker = odp_cpumask_default_worker(&cpumask, nb_worker);
 	args->worker_count = nb_worker;
 
