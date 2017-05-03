@@ -257,6 +257,19 @@ AC_ARG_ENABLE([abi-compat],
 AC_SUBST(ODP_ABI_COMPAT)
 
 ##########################################################################
+# Enable/disable ODP_L3FWD_5TUPLE
+##########################################################################
+ODP_L3FWD_5TUPLE=0
+AC_ARG_ENABLE([l3fwd-5tuple],
+    [  --enable-l3fwd-5tuple    display debugging information],
+    [if test "x$enableval" = "xyes"; then
+	ODP_L3FWD_5TUPLE=1
+     else
+	ODP_L3FWD_5TUPLE=0
+    fi])
+ODP_CFLAGS="$ODP_CFLAGS -DODP_L3FWD_5TUPLE=$ODP_L3FWD_5TUPLE"
+
+##########################################################################
 # Default warning setup
 ##########################################################################
 ODP_CFLAGS="$ODP_CFLAGS -W -Wall -Werror -Wstrict-prototypes -Wmissing-prototypes"
