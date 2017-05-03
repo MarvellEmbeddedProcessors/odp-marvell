@@ -250,6 +250,7 @@ static int mvsam_odp_crypto_session_create(
 
 	crp_thr = &crp_thread[thr_id];
 	memset(&sam_session, 0, sizeof(sam_session));
+	sam_session.proto          = SAM_PROTO_NONE; /* only algorithm offload */
 	sam_session.dir            = params->op;
 	sam_session.cipher_alg     = params->cipher_alg;
 	sam_session.cipher_mode    = SAM_CIPHER_CBC;
@@ -257,11 +258,11 @@ static int mvsam_odp_crypto_session_create(
 	sam_session.cipher_key     = params->cipher_key.data;
 	sam_session.cipher_key_len = params->cipher_key.length;
 	if (params->auth_alg == ODP_AUTH_ALG_MD5_96) {
-		sam_session.auth_icv_len = 12;
 		sam_session.auth_alg     = mvsam_get_auth_alg(params->auth_alg);
 		sam_session.auth_key     = params->auth_key.data;
 		sam_session.auth_key_len = params->auth_key.length;
-		sam_session.auth_aad_len = 0;
+		sam_session.u.basic.auth_icv_len = 12;
+		sam_session.u.basic.auth_aad_len = 0;
 	}
 
 	cio = get_crp_thr_cio(crp_thr, params);
