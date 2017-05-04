@@ -644,7 +644,14 @@ static int mvpp2_mac_get(pktio_entry_t *pktio_entry,
 
 static int mvpp2_promisc_mode_set(pktio_entry_t *pktio_entry,  int enable)
 {
-	return pp2_ppio_set_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, enable);
+	int err;
+
+	err = pp2_ppio_set_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, enable);
+	if (err) {
+		err = -1;
+	}
+
+	return err;
 }
 
 static int mvpp2_promisc_mode_get(pktio_entry_t *pktio_entry)
