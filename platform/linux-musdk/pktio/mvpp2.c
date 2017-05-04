@@ -656,9 +656,14 @@ static int mvpp2_promisc_mode_set(pktio_entry_t *pktio_entry,  int enable)
 
 static int mvpp2_promisc_mode_get(pktio_entry_t *pktio_entry)
 {
-	NOTUSED(pktio_entry);
-	ODP_UNIMPLEMENTED();
-	return 0;
+	int err, enable = 0;
+
+	err = pp2_ppio_get_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, &enable);
+	if (err) {
+		enable = -1;
+	}
+
+	return enable;
 }
 
 static int mvpp2_link_status(pktio_entry_t *pktio_entry)
