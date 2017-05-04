@@ -501,10 +501,8 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 static int mvpp2_close(pktio_entry_t *pktio_entry)
 {
 	/* Close (destroy) the PP2 port */
-pr_line;
 	pp2_ppio_deinit(pktio_entry->s.pkt_mvpp2.ppio);
 	ODP_DBG("port '%s' was closed\n", pktio_entry->s.name);
-pr_line;
 	return 0;
 }
 
@@ -533,10 +531,8 @@ static int mvpp2_stop(pktio_entry_t *pktio_entry)
 	/* Set the PP2 port in standby-mode.
 	 * Ingress and egress disabled
 	 */
-pr_line;
 	pp2_ppio_disable(pktio_entry->s.pkt_mvpp2.ppio);
 	ODP_DBG("port '%s' was stopped\n", pktio_entry->s.name);
-pr_line;
 	return 0;
 }
 
@@ -636,7 +632,6 @@ static int mvpp2_stats_reset(pktio_entry_t *pktio_entry)
 
 static uint32_t mvpp2_mtu_get(pktio_entry_t *pktio_entry)
 {
-pr_line;
 	return pktio_entry->s.pkt_mvpp2.mtu;
 }
 
