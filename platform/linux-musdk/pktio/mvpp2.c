@@ -670,9 +670,15 @@ static int mvpp2_promisc_mode_get(pktio_entry_t *pktio_entry)
 static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 {
 	/* Returns false (zero) if link is down or true(one) if link is up */
-	NOTUSED(pktio_entry);
-	/* TODO: implement it correctly! */
-	return 1;
+
+	int err, link_up = 0;
+
+	err = pp2_ppio_get_link_state(pktio_entry->s.pkt_mvpp2.ppio, &link_up);
+	if (err) {
+		link_up = -1;
+	}
+
+	return link_up;
 }
 
 #ifndef USE_HW_BUFF_RECYLCE
