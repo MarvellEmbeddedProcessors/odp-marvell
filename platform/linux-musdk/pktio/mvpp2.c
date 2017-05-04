@@ -668,7 +668,12 @@ static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif *hif,
 					   struct tx_shadow_q *shadow_q, u8 tc)
 {
-	u16 num_conf = 0;
+	struct buff_release_entry *entry;
+	odp_packet_t pkt;
+	u16 i, num_conf = 0;
+#ifdef USE_LPBK_SW_RECYLCE
+	u16 num_bufs = 0;
+#endif
 
 	pp2_ppio_get_num_outq_done(ppio, hif, tc, &num_conf);
 
@@ -681,72 +686,59 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 	shadow_q->num_to_release = 0;
 
 #ifndef USE_LPBK_SW_RECYLCE
-	{
-		int i;
-
-		for (i = 0; i < num_conf; i++) {
-			struct buff_release_entry *entry;
-
-			entry = &shadow_q->ent[shadow_q->read_ind];
-			if (unlikely(!entry->buff.cookie && !entry->buff.addr)) {
-				ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
-					shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
-				shadow_q->read_ind++;
-				if (shadow_q->read_ind == SHADOW_Q_MAX_SIZE)
-					shadow_q->read_ind = 0;
-				continue;
-			}
+	for (i = 0; i < num_conf; i++) {
+		entry = &shadow_q->ent[shadow_q->read_ind];
+		if (unlikely(!entry->buff.cookie && !entry->buff.addr)) {
+			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
+				shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
 			shadow_q->read_ind++;
 			if (shadow_q->read_ind == SHADOW_Q_MAX_SIZE)
 				shadow_q->read_ind = 0;
-			if (likely(entry->bpool)) {
-				pp2_bpool_put_buff(hif, entry->bpool, &entry->buff);
-			} else {
-				odp_packet_t pkt;
+			continue;
+		}
+		shadow_q->read_ind++;
+		if (shadow_q->read_ind == SHADOW_Q_MAX_SIZE)
+			shadow_q->read_ind = 0;
 
-				pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
-				odp_packet_free_multi(&pkt, 1);
-			}
+		if (likely(entry->bpool))
+			pp2_bpool_put_buff(hif, entry->bpool, &entry->buff);
+		else {
+			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
+			odp_packet_free_multi(&pkt, 1);
 		}
 	}
 #else
-	{
-		u16 num_bufs = 0;
-		int i;
+	for (i = 0; i < num_conf; i++) {
+		entry = &shadow_q->ent[shadow_q->read_ind + num_bufs];
+		if (unlikely(!entry->buff.addr)) {
+			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
+				shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
+			goto skip_buf;
+		}
 
-		for (i = 0; i < num_conf; i++) {
-			struct buff_release_entry *entry;
+		if (unlikely(!entry->bpool)) {
+			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
+			odp_packet_free_multi(&pkt, 1);
+			goto skip_buf;
+		}
 
-			entry = &shadow_q->ent[shadow_q->read_ind + num_bufs];
-			if (unlikely(!entry->buff.cookie && !entry->buff.addr)) {
-				ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
-					shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
-				goto skip_buf;
-			}
-			if (unlikely(!(entry->bpool))) {
-				odp_packet_t pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
-
-				odp_packet_free_multi(&pkt, 1);
-				goto skip_buf;
-			}
-
-			num_bufs++;
-			if (unlikely(shadow_q->read_ind + num_bufs == SHADOW_Q_MAX_SIZE))
-				goto skip_buf;
-			continue;
+		num_bufs++;
+		if (unlikely(shadow_q->read_ind + num_bufs == SHADOW_Q_MAX_SIZE))
+			goto skip_buf;
+		continue;
 skip_buf:
+		if (num_bufs) {
 			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
 			shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
 			shadow_q->size -= num_bufs;
 			num_bufs = 0;
 		}
-		if (num_bufs) {
-			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
-			shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
-			shadow_q->size -= num_bufs;
-		}
 	}
-
+	if (num_bufs) {
+		pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
+		shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
+		shadow_q->size -= num_bufs;
+	}
 #endif /* USE_LPBK_SW_RECYLCE */
 }
 #endif /* USE_HW_BUFF_RECYLCE */
@@ -844,6 +836,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	u8			 tc;
 	int			 err, sent = 0;
 	pkt_mvpp2_t		*pkt_mvpp2 = &pktio_entry->s.pkt_mvpp2;
+	pktio_entry_t 		*input_entry;
 
 	/* TODO: only support now RSS; no support for QoS; how to translate txq_id to tc/hif???? */
 	tc = 0;
@@ -916,8 +909,13 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 #else
 		shadow_q->ent[shadow_q->write_ind].buff.cookie = lower_32_bits((u64)(uintptr_t)pkt);
 		shadow_q->ent[shadow_q->write_ind].buff.addr = pa;
-		shadow_q->ent[shadow_q->write_ind].bpool =
-			(pkt_hdr->input) ? get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool : NULL;
+
+		input_entry = get_pktio_entry(pkt_hdr->input);
+		if (odp_likely(input_entry && input_entry->s.ops == &mvpp2_pktio_ops))
+			shadow_q->ent[shadow_q->write_ind].bpool = input_entry->s.pkt_mvpp2.bpool;
+		else
+			shadow_q->ent[shadow_q->write_ind].bpool = NULL;
+
 		shadow_q->write_ind = (shadow_q->write_ind + 1) & SHADOW_Q_MAX_SIZE_MASK;
 		shadow_q->size++;
 #endif /* USE_HW_BUFF_RECYLCE */
