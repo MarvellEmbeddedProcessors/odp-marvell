@@ -364,6 +364,7 @@ static void init_capability(pktio_entry_t *pktio_entry)
 	capa->max_input_queues = (MVPP2_MAX_NUM_TCS_PER_PORT * MVPP2_MAX_NUM_QS_PER_TC);
 	capa->max_output_queues = (MVPP2_MAX_NUM_TCS_PER_PORT * MVPP2_MAX_NUM_QS_PER_TC);
 	capa->loop_supported = true;
+	capa->set_op.op.promisc_mode = true;
 	odp_pktio_config_init(&capa->config);
 }
 
