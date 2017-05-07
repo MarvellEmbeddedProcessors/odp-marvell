@@ -241,9 +241,6 @@ static args_t *args;
 
 static odp_pool_t out_pool = ODP_POOL_INVALID;
 
-/** ATOMIC queue for IPsec sequence number assignment */
-static odp_queue_t seqnumq;
-
 /** ORDERED queue (eventually) for per packet crypto API completion events */
 static odp_queue_t completionq[CRYPTO_QUEUE_MAX_INDEX];
 
@@ -254,7 +251,7 @@ static odp_pool_t ctx_pool = ODP_POOL_INVALID;
 
 static struct l3fwd_pktio_s port_io_config[MAX_NB_PKTIO];
 
-
+static uint32_t ipsec_cpu_number;
 #ifdef PKT_ECHO_SUPPORT
 static inline void swap_l2(char *buf)
 {
@@ -289,34 +286,41 @@ static inline void swap_l3(char *buf)
 */
 
 
-struct pkt_ctx_t * free_context_next_node = NULL;
-static odp_buffer_t ctx_buf_mng_db[MAX_CTX_DB];
+struct pkt_ctx_t * free_context_next_node[MAX_WORKERS];
+static odp_buffer_t ctx_buf_mng_db[MAX_WORKERS][MAX_CTX_DB];
 
 static struct pkt_ctx_t * free_context_get( void ) {
-	struct pkt_ctx_t * current_ctx = free_context_next_node;
-	free_context_next_node = free_context_next_node->next_node;
+	int worker = odp_thread_id();
+	struct pkt_ctx_t * current_ctx = free_context_next_node[worker];
+	free_context_next_node[worker] = free_context_next_node[worker]->next_node;
 	return current_ctx;
 }
 
 static void free_context_release(struct pkt_ctx_t *ctx) {
-	ctx->next_node = free_context_next_node;
-	free_context_next_node = ctx;
+	int worker = odp_thread_id();
+	ctx->next_node = free_context_next_node[worker];
+	free_context_next_node[worker] = ctx;
 }
 
 static void ctx_buf_mng_init(void) {
 
-	for (int i = 0; i < MAX_CTX_DB; i++) {
-		ctx_buf_mng_db[i] = odp_buffer_alloc(ctx_pool);
+	int worker = odp_thread_id();
 
-		if (odp_unlikely(ODP_BUFFER_INVALID == ctx_buf_mng_db[i])) {
-			printf("Bad pointer %s i=%d\n", __func__, i);
+	free_context_next_node[worker] = NULL;
+
+	for (int i = 0; i < MAX_CTX_DB/2; i++) {
+		ctx_buf_mng_db[worker][i] = odp_buffer_alloc(ctx_pool);
+
+		if (odp_unlikely(ODP_BUFFER_INVALID == ctx_buf_mng_db[worker][i])) {
+			printf("Bad pointer %s i=%d worker %d\n", __func__, i, worker);
 			abort();
 		}
 
-		odp_buffer_t ctx_buf = ctx_buf_mng_db[i];
+		odp_buffer_t ctx_buf = ctx_buf_mng_db[worker][i];
 		struct pkt_ctx_t *ctx = odp_buffer_addr(ctx_buf);
 		ctx->buffer = ctx_buf;
-		free_context_release(ctx);   /* keep all contexes in link list */
+		ctx->next_node = free_context_next_node[worker];    /* keep all contexes in link list */
+		free_context_next_node[worker] = ctx;
 	}
 }
 
@@ -471,17 +475,6 @@ void ipsec_init_pre(void)
 	completionq[CRYPTO_QUEUE_INBOUND_INDEX] = queue_create("completion_in", &qparam);
 	if (ODP_QUEUE_INVALID == completionq[CRYPTO_QUEUE_INBOUND_INDEX]) {
 		EXAMPLE_ERR("Error: completion queue creation failed\n");
-		exit(EXIT_FAILURE);
-	}
-
-	qparam.type        = ODP_QUEUE_TYPE_PLAIN;
-	qparam.sched.prio  = ODP_SCHED_PRIO_HIGHEST;
-	qparam.sched.sync  = ODP_SCHED_SYNC_ATOMIC;
-	qparam.sched.group = ODP_SCHED_GROUP_ALL;
-
-	seqnumq = queue_create("seqnum", &qparam);
-	if (ODP_QUEUE_INVALID == seqnumq) {
-		EXAMPLE_ERR("Error: sequence number queue creation failed\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1199,11 +1192,6 @@ pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
 }
 
 
-static odp_event_t  after_crypto_events[MAX_PKT_BURST];
-static odp_packet_t after_crypto_pkt_outgoing[MAX_PKT_BURST];
-static odp_packet_t after_crypto_pkt_ingoing[MAX_PKT_BURST];
-
-
 static int crypto_rx_handler_inbound(void) {
 
 	int pkt_index;
@@ -1213,6 +1201,8 @@ static int crypto_rx_handler_inbound(void) {
 	int after_crypto_pkts;
 	odp_pktout_queue_t output_ingoing_queue;
 	struct pkt_ctx_t	*after_crypto_ctx[MAX_PKT_BURST];
+	odp_event_t	after_crypto_events[MAX_PKT_BURST];
+	odp_packet_t after_crypto_pkt_ingoing[MAX_PKT_BURST];
 
 	/* Encryption: src_port = 0;  dsp_port = 1; Decryption:  src_port = 1;	dsp_port = 0; - for demo only  */
 
@@ -1293,6 +1283,8 @@ static int crypto_rx_handler_outbound(void) {
 	int after_crypto_pkts;
 	odp_pktout_queue_t output_outgoing_queue;
 	struct pkt_ctx_t	*after_crypto_ctx[MAX_PKT_BURST];
+	odp_event_t	after_crypto_events[MAX_PKT_BURST];
+	odp_packet_t after_crypto_pkt_outgoing[MAX_PKT_BURST];
 
 	/* Encryption: src_port = 0;  dsp_port = 1; Decryption:  src_port = 1;	dsp_port = 0; - for demo only  */
 
@@ -1361,8 +1353,8 @@ int crypto_rx_handler(void)
 {
 
 	/* FROM CRYPTO */
-	int sent_encrypted = crypto_rx_handler_inbound();
-	int sent_decrypted = crypto_rx_handler_outbound();
+	int sent_decrypted = crypto_rx_handler_inbound();
+	int sent_encrypted = crypto_rx_handler_outbound();
 
 #ifdef IPSEC_DEBUG
 	if ( sent_encrypted + sent_decrypted != 0 ) {
@@ -1424,11 +1416,6 @@ void network_rx_handler(odp_packet_t *pkt_tbl, int pkts) {
 				dprintf("ODP Main Loop 4.1: !!! Jump to TX rc=%d state=%d	packet=%d\n", rc, ctx[pkt_index]->state, pkt_index);
 				continue; /*  ctx->state = PKT_STATE_TRANSMIT;   packet will be sent */
 			}
-			/* else {
-			//	ctx[i]->state = PKT_STATE_IPSEC_OUT_SEQ;
-			//	if (odp_queue_enq(seqnumq, ev))    // not clear why need seqnumq enq
-			//		rc = PKT_DROP;
-			} */
 
 			/* under PKT_STATE_IPSEC_OUT_SEQ  */
 			ctx[pkt_index]->state = PKT_STATE_IPSEC_OUT_FINISH;
@@ -1471,6 +1458,7 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	int port = 0;
 	int num_pktio = 0;
 	int empty_rx_counters = 0;
+	int thread_id = odp_thread_id();
 
 
 	ctx_buf_mng_init();
@@ -1494,13 +1482,15 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	port = 0;
 	for (;;) {
 
-		if (num_pktio > 1) {
-			inq = input_queues[port];
-			port++;
-			if (port == num_pktio)
+		if ( ipsec_cpu_number > 1 ) {
+			port = thread_id;
+		}
+		else {
+			if (++port == num_pktio)
 				port = 0;
 		}
-
+		inq = input_queues[port];
+		
 		pkts = odp_pktin_recv(inq, pkt_tbl, MAX_PKT_BURST);
 		if (pkts < 1) {
 			empty_rx_counters++;
@@ -1819,6 +1809,7 @@ main(int argc, char *argv[])
 
 	/* Default to system CPU count unless user specified */
 	num_workers = MAX_WORKERS;
+	ipsec_cpu_number = args->appl.cpu_count;
 	if (args->appl.cpu_count)
 		num_workers = args->appl.cpu_count;
 
