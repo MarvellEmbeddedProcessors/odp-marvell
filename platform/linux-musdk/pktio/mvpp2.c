@@ -31,9 +31,8 @@
 
 
 /*#define USE_HW_BUFF_RECYLCE*/
-#define MAX_NUM_QS_PER_CORE		MVPP2_MAX_NUM_TCS_PER_PORT
 #define MAX_NUM_PACKPROCS		1
-#define SHADOW_Q_SIZE			MVPP2_TXQ_SIZE
+#define BUFFER_RELEASE_BURST_SIZE	128
 
 #define upper_32_bits(n) ((u32)(((n) >> 16) >> 16))
 #define lower_32_bits(n) ((u32)(n))
@@ -60,19 +59,12 @@ typedef struct port_desc {
 	int		 ppio_id;
 } port_desc_t;
 
-struct tx_shadow_q {
-	u16				 read_ind;
-	u16				 write_ind;
-	struct buff_release_entry	 ent[SHADOW_Q_SIZE];
-};
-
 /* Per thread unique ID used during run-time BM and HIF
  * resource indexing
  */
 struct thd_info {
 	int			 id;
 	struct pp2_hif		*hif;
-	struct tx_shadow_q	 shadow_qs[MAX_NUM_QS_PER_CORE];
 };
 
 /* Per input-Q used during run-time */
@@ -345,7 +337,6 @@ static int mvpp2_init_local(void)
 		return -EIO;
 	}
 
-	memset(thds[id].shadow_qs, 0, sizeof(thds[id].shadow_qs));
 	return 0;
 }
 
@@ -495,6 +486,8 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	/* Set default num queues - will be updated at config */
 	pktio_entry->s.num_in_queue = 0;
 	pktio_entry->s.num_out_queue = 0;
+
+	memset(pktio_entry->s.pkt_mvpp2.shadow_qs, 0, sizeof(pktio_entry->s.pkt_mvpp2.shadow_qs));
 
 	return 0;
 }
@@ -685,11 +678,17 @@ static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif *hif,
 					   struct tx_shadow_q *shadow_q, u8 tc)
 {
-	u16			 num_conf = 0;
-
-	shadow_q = &thds[get_thr_id()].shadow_qs[tc];
+	u16 num_conf = 0;
 
 	pp2_ppio_get_num_outq_done(ppio, hif, tc, &num_conf);
+
+	shadow_q->num_to_release += num_conf;
+
+	if (odp_likely(shadow_q->num_to_release < BUFFER_RELEASE_BURST_SIZE))
+		return;
+
+	num_conf = shadow_q->num_to_release;
+	shadow_q->num_to_release = 0;
 
 #ifndef USE_LPBK_SW_RECYLCE
 	{
@@ -703,12 +702,12 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 				ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
 					shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
 				shadow_q->read_ind++;
-				if (shadow_q->read_ind == SHADOW_Q_SIZE)
+				if (shadow_q->read_ind == SHADOW_Q_MAX_SIZE)
 					shadow_q->read_ind = 0;
 				continue;
 			}
 			shadow_q->read_ind++;
-			if (shadow_q->read_ind == SHADOW_Q_SIZE)
+			if (shadow_q->read_ind == SHADOW_Q_MAX_SIZE)
 				shadow_q->read_ind = 0;
 			if (likely(entry->bpool)) {
 				pp2_bpool_put_buff(hif, entry->bpool, &entry->buff);
@@ -742,19 +741,19 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 			}
 
 			num_bufs++;
-			if (unlikely(shadow_q->read_ind + num_bufs == SHADOW_Q_SIZE))
+			if (unlikely(shadow_q->read_ind + num_bufs == SHADOW_Q_MAX_SIZE))
 				goto skip_buf;
 			continue;
 skip_buf:
 			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
-			shadow_q->read_ind += num_bufs;
+			shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
+			shadow_q->size -= num_bufs;
 			num_bufs = 0;
-			if (shadow_q->read_ind == SHADOW_Q_SIZE)
-				shadow_q->read_ind = 0;
 		}
 		if (num_bufs) {
 			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
-			shadow_q->read_ind += num_bufs;
+			shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
+			shadow_q->size -= num_bufs;
 		}
 	}
 
@@ -843,15 +842,14 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	struct pp2_hif		*hif;
 #ifndef USE_HW_BUFF_RECYLCE
 	struct tx_shadow_q	*shadow_q;
+	u16			 shadow_q_free_size;
 #endif /* !USE_HW_BUFF_RECYLCE */
 	struct pp2_ppio_desc	 descs[CONFIG_BURST_SIZE];
 	dma_addr_t		 pa;
 	u16			 i, num, len;
-#ifndef USE_HW_BUFF_RECYLCE
-#endif /* !USE_HW_BUFF_RECYLCE */
 	u8			 tc;
 	int			 err;
-	struct pp2_ppio		*ppio = pktio_entry->s.pkt_mvpp2.ppio;
+	pkt_mvpp2_t		*pkt_mvpp2 = &pktio_entry->s.pkt_mvpp2;
 
 	/* TODO: only support now RSS; no support for QoS; how to translate txq_id to tc/hif???? */
 	tc = 0;
@@ -859,18 +857,26 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 
 	hif = thds[get_thr_id()].hif;
 #ifndef USE_HW_BUFF_RECYLCE
-	shadow_q = &thds[get_thr_id()].shadow_qs[tc];
-	mvpp2_free_sent_buffers(ppio, hif, shadow_q, tc);
+	shadow_q = &pkt_mvpp2->shadow_qs[get_thr_id()][tc];
+	if (shadow_q->size)
+		mvpp2_free_sent_buffers(pkt_mvpp2->ppio, hif, shadow_q, tc);
+
+	shadow_q_free_size = SHADOW_Q_MAX_SIZE - shadow_q->size - 1;
+	if (odp_unlikely(num_pkts >= shadow_q_free_size)) {
+		ODP_ERR("No room in shadow queue for %d packets!!! %d packets will be sent.\n",
+			num_pkts, shadow_q_free_size);
+		num_pkts = shadow_q_free_size;
+	}
 #endif /* !USE_HW_BUFF_RECYLCE */
 
-	if (!num_pkts)
-		return 0;
 	num = num_pkts;
 	if (num > CONFIG_BURST_SIZE)
 		num = CONFIG_BURST_SIZE;
 
 	for (i = 0; i < num; i++) {
 		pkt = pkt_table[i];
+		if (!pkt)
+			continue;
 		len = odp_packet_len(pkt);
 		pkt_hdr = odp_packet_hdr(pkt);
 		pa = mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(pkt)));
@@ -922,15 +928,13 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 #else
 		shadow_q->ent[shadow_q->write_ind].buff.cookie = lower_32_bits((u64)(uintptr_t)pkt);
 		shadow_q->ent[shadow_q->write_ind].buff.addr = pa;
-		shadow_q->ent[shadow_q->write_ind].bpool = (pkt_hdr->input) ?
-							   get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool :
-							   NULL;
-		shadow_q->write_ind++;
-		if (shadow_q->write_ind == SHADOW_Q_SIZE)
-			shadow_q->write_ind = 0;
+		shadow_q->ent[shadow_q->write_ind].bpool =
+			(pkt_hdr->input) ? get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool : NULL;
+		shadow_q->write_ind = (shadow_q->write_ind + 1) & SHADOW_Q_MAX_SIZE_MASK;
+		shadow_q->size++;
 #endif /* USE_HW_BUFF_RECYLCE */
 	}
-	err = pp2_ppio_send(ppio, hif, tc, descs, &num);
+	err = pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &num);
 	if (num && (err != 0))
 		return 0;
 
