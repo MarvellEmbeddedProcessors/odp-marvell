@@ -11,7 +11,19 @@
 #include <drivers/mv_pp2_bpool.h>
 #include <drivers/mv_pp2_ppio.h>
 
-#define MAX_NUM_QS_PER_CORE		MVPP2_MAX_NUM_TCS_PER_PORT
+#define MAX_NUM_OUTQS_PER_CORE		MVPP2_MAX_NUM_TCS_PER_PORT
+#define SHADOW_Q_MAX_SIZE		MVPP2_TXQ_SIZE		/* Should be power of 2 */
+#define SHADOW_Q_MAX_SIZE_MASK		(SHADOW_Q_MAX_SIZE - 1)
+
+ODP_STATIC_ASSERT((ODP_VAL_IS_POWER_2(SHADOW_Q_MAX_SIZE)), "SHADOW_Q_MAX_SIZE should be power of 2");
+
+struct tx_shadow_q {
+	u16				 read_ind;		/* read index - used when releasing buffers */
+	u16				 write_ind;		/* write index - used when sending buffers */
+	u16				 size;			/* queue occupied size */
+	u16				 num_to_release;	/* number of buffers sent, that can be released */
+	struct buff_release_entry	 ent[SHADOW_Q_MAX_SIZE];/* queue entries */
+};
 
 typedef struct {
 	uint16_t		 pp_id;
@@ -28,6 +40,7 @@ typedef struct {
 	unsigned char		 if_mac[ETH_ALEN];	/**< eth mac address */
 	int			 sockfd;
 	odp_pktio_capability_t	 capa;	/**< interface capabilities */
+	struct tx_shadow_q	 shadow_qs[MVPP2_TOTAL_NUM_HIFS][MAX_NUM_OUTQS_PER_CORE];
 } pkt_mvpp2_t;
 
 #endif /* ODP_PACKET_MUSDK_H_ */
