@@ -50,9 +50,8 @@
 
 #define UNUSED			__attribute__((__unused__))
 
-//#define IPSEC_DEBUG
+/*#define IPSEC_DEBUG */
 #define MEMMOVE_OPTIMIZED
-
 
 #ifdef IPSEC_DEBUG
 #define dprintf printf
@@ -83,7 +82,7 @@
 
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	32
-#define MAX_CTX_DB      MAX_PKT_BURST*8*8    /* 256*2*8 */
+#define MAX_CTX_DB      MAX_PKT_BURST*8*8    /* 256*8 */
 
 #define MAX_NB_PKTIO	2
 #define MAX_NB_QUEUE	2
@@ -211,7 +210,7 @@ struct pkt_ctx_t {
 	ipsec_ctx_t  ipsec;   /**< IPsec specific context */
 	odp_pktout_queue_t pktout; /**< Packet output queue */
 	odp_bool_t   is_valid;
-	struct pkt_ctx_t *  next_node;
+	struct pkt_ctx_t * next_node;
 };
 
 struct l3fwd_pktio_s {
@@ -290,7 +289,7 @@ static inline void swap_l3(char *buf)
 */
 
 
-struct pkt_ctx_t *  free_context_next_node = NULL;
+struct pkt_ctx_t * free_context_next_node = NULL;
 static odp_buffer_t ctx_buf_mng_db[MAX_CTX_DB];
 
 static struct pkt_ctx_t * free_context_get( void ) {
@@ -968,7 +967,7 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 					   ip->proto);
 	if (!entry) {
 		dprintf("out_classify %s find_ipsec_cache_entry_out failed\n", __func__ );
-		return PKT_CONTINUE;
+		return PKT_DROP;  /* routing is not defined yet - drop */
 	}
 
 	/* Save IPv4 stuff */
@@ -1213,7 +1212,7 @@ static int crypto_rx_handler_inbound(void) {
 	int after_crypto_pkt_ingoing_index = 0;
 	int after_crypto_pkts;
 	odp_pktout_queue_t output_ingoing_queue;
-	struct pkt_ctx_t	*after_crypto_ctx[MAX_CTX_DB];
+	struct pkt_ctx_t	*after_crypto_ctx[MAX_PKT_BURST];
 
 	/* Encryption: src_port = 0;  dsp_port = 1; Decryption:  src_port = 1;	dsp_port = 0; - for demo only  */
 
@@ -1241,8 +1240,8 @@ static int crypto_rx_handler_inbound(void) {
 		after_crypto_pkt_ingoing[after_crypto_pkt_ingoing_index] = result.pkt;
 
 #ifdef IPSEC_DEBUG
-				printf("After CRYPTO-DECRYPTION\n");
-				odp_packet_print(result.pkt);
+		printf("After CRYPTO-DECRYPTION\n");
+		odp_packet_print(result.pkt);
 #endif
 
 		/* Handle decryption  */
@@ -1273,9 +1272,12 @@ static int crypto_rx_handler_inbound(void) {
 	}
 
 	int sent_decrypted = 0;
-	if (after_crypto_pkt_ingoing_index) {
-		sent_decrypted = odp_pktout_send(output_ingoing_queue, after_crypto_pkt_ingoing, after_crypto_pkt_ingoing_index);
-		dprintf("ODP Main Loop 12: TX ingoing sent=%d from %d\n", sent_decrypted, after_crypto_pkt_ingoing_index);
+	while (after_crypto_pkt_ingoing_index - sent_decrypted) {
+		sent_decrypted += odp_pktout_send(output_ingoing_queue,
+			&after_crypto_pkt_ingoing[sent_decrypted],
+			after_crypto_pkt_ingoing_index - sent_decrypted);
+		dprintf("ODP Main Loop 12: TX ingoing sent=%d from %d\n",
+			sent_decrypted, after_crypto_pkt_ingoing_index);
 	}
 
 	return sent_decrypted;
@@ -1290,7 +1292,7 @@ static int crypto_rx_handler_outbound(void) {
 	int after_crypto_pkt_outgoing_index = 0;
 	int after_crypto_pkts;
 	odp_pktout_queue_t output_outgoing_queue;
-	struct pkt_ctx_t	*after_crypto_ctx[MAX_CTX_DB];
+	struct pkt_ctx_t	*after_crypto_ctx[MAX_PKT_BURST];
 
 	/* Encryption: src_port = 0;  dsp_port = 1; Decryption:  src_port = 1;	dsp_port = 0; - for demo only  */
 
@@ -1315,17 +1317,19 @@ static int crypto_rx_handler_outbound(void) {
 		}
 
 #ifdef IPSEC_DEBUG
-				printf("After CRYPTO\n");
-				odp_packet_print(result.pkt);
+		printf("After CRYPTO\n");
+		odp_packet_print(result.pkt);
 #endif
 
-		dprintf("ODP Main Loop 7: Encryption odp_packet_from_event state=%d  packet=%d\n", after_crypto_ctx[pkt_index]->state, pkt_index);
+		dprintf("ODP Main Loop 7: Encryption odp_packet_from_event state=%d  packet=%d\n",
+			after_crypto_ctx[pkt_index]->state, pkt_index);
 
 		after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index] = result.pkt;
 		output_outgoing_queue = after_crypto_ctx[pkt_index]->pktout;
 
 		/* Handle Encryption */
-		rc = do_ipsec_out_finish(after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index], after_crypto_ctx[pkt_index], &result);
+		rc = do_ipsec_out_finish(after_crypto_pkt_outgoing[after_crypto_pkt_outgoing_index],
+			after_crypto_ctx[pkt_index], &result);
 
 		dprintf("ODP Main Loop 10: do_ipsec_out_finish rc=%d result=%d\n", rc, result.ok);
 
@@ -1339,9 +1343,12 @@ static int crypto_rx_handler_outbound(void) {
 	}
 
 	int sent_encrypted = 0;
-	if (after_crypto_pkt_outgoing_index) {
-		sent_encrypted = odp_pktout_send(output_outgoing_queue, after_crypto_pkt_outgoing, after_crypto_pkt_outgoing_index);
-		dprintf("ODP Main Loop 11: TX outgoing sent=%d from %d\n", sent_encrypted, after_crypto_pkt_outgoing_index);
+	while (after_crypto_pkt_outgoing_index - sent_encrypted) {
+		sent_encrypted += odp_pktout_send(output_outgoing_queue,
+			&after_crypto_pkt_outgoing[sent_encrypted],
+			after_crypto_pkt_outgoing_index - sent_encrypted);
+		dprintf("ODP Main Loop 11: TX outgoing sent=%d from %d\n",
+			sent_encrypted, after_crypto_pkt_outgoing_index);
 	}
 
 	return sent_encrypted;
