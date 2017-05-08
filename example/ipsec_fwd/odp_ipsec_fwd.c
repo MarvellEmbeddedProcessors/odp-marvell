@@ -130,7 +130,6 @@ do {						\
 #define STOP_N_REPORT_COUNT_CYCLES(_num,_max)
 #endif /* CHECK_CYCLES */
 
-
 /**
  * Parsed command line application arguments
  */
@@ -251,7 +250,9 @@ static odp_pool_t ctx_pool = ODP_POOL_INVALID;
 
 static struct l3fwd_pktio_s port_io_config[MAX_NB_PKTIO];
 
+static uint32_t if_mtu[MAX_NB_PKTIO];
 static uint32_t ipsec_cpu_number;
+
 #ifdef PKT_ECHO_SUPPORT
 static inline void swap_l2(char *buf)
 {
@@ -654,6 +655,8 @@ void initialize_intf(char *intf, int if_index)
 
 	/* Resolve any routes using this interface for output */
 	resolve_fwd_db(intf, pktout, src_mac);
+
+	if_mtu[if_index] = odp_pktio_mtu(pktio);
 }
 
 /**
@@ -807,7 +810,6 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 	int rc = odp_crypto_operation(&params,
 				 &posted,
 				 result);
-
 	if ((rc != 0) || (!posted && !result->ok)) {
 		dprintf("do_ipsec_in_classify 3   odp_crypto_operation failed\n");
 		return PKT_DROP;
@@ -936,7 +938,8 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 static
 pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 					struct pkt_ctx_t *ctx,
-					odp_bool_t *skip)
+					odp_bool_t *skip,
+					int port)
 {
 	uint8_t *buf = odp_packet_data(pkt);
 	odph_ipv4hdr_t *ip = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
@@ -1065,6 +1068,18 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 		params.hash_result_offset = ah->icv - buf;
 	}
 
+	/* Test if expected encrypted packet size is more then MTU size */
+	uint32_t expected_packet_size = odp_cpu_to_be_16(ip->tot_len) + hdr_len + trl_len + icv_len;
+
+	dprintf("ip->tot_len %d hdr_len %d trl_len %d icv_len %d exp_pkt_size %d mtu %d\n",
+		odp_cpu_to_be_16(ip->tot_len), hdr_len, trl_len, icv_len, expected_packet_size, if_mtu[port]);
+
+	if (expected_packet_size > if_mtu[port]) {
+		dprintf("%s too long pkt after encryption. Encrypt %d mtu %d\n",
+			__func__, expected_packet_size, if_mtu[port]);
+		return PKT_DROP;  /* too long packets - drop */
+	}
+
 	/* Set IPv4 length before authentication */
 	ipv4_adjust_len(ip, hdr_len + trl_len + icv_len);
 
@@ -1151,6 +1166,7 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 	if ((rc != 0) || (!posted && !result->ok)) {
 		return PKT_DROP;
 	}
+
 	return (posted) ? PKT_POSTED : PKT_CONTINUE;
 }
 
@@ -1367,7 +1383,7 @@ int crypto_rx_handler(void)
 }
 
 static
-void network_rx_handler(odp_packet_t *pkt_tbl, int pkts) {
+void network_rx_handler(odp_packet_t *pkt_tbl, int pkts, int port) {
 
 	int pkt_index;
 	struct pkt_ctx_t	*ctx[MAX_PKT_BURST];
@@ -1407,7 +1423,7 @@ void network_rx_handler(odp_packet_t *pkt_tbl, int pkts) {
 
 			ctx[pkt_index]->state = PKT_STATE_IPSEC_OUT_CLASSIFY;
 
-			rc = do_ipsec_out_classify(pkt_tbl[pkt_index],ctx[pkt_index],&skip);
+			rc = do_ipsec_out_classify(pkt_tbl[pkt_index],ctx[pkt_index],&skip, port);
 			CHECK_RC(rc, ctx, pkt_tbl, pkt_index, 4);
 
 			dprintf("ODP Main Loop 4: do_ipsec_out_classify rc=%d state=%d  packet=%d\n", rc, ctx[pkt_index]->state, pkt_index);
@@ -1490,21 +1506,21 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 				port = 0;
 		}
 		inq = input_queues[port];
-		
+
 		pkts = odp_pktin_recv(inq, pkt_tbl, MAX_PKT_BURST);
 		if (pkts < 1) {
 			empty_rx_counters++;
 			if ( empty_rx_counters > EMPTY_RX_THRESHOULD ) {
 				odp_crypto_operation(NULL, NULL, NULL);
 				empty_rx_counters = 0;
-				crypto_rx_handler(); 
+				crypto_rx_handler();
 			}
 			continue;
 		}
 
 		empty_rx_counters = 0;
 
-		network_rx_handler(pkt_tbl, pkts);
+		network_rx_handler(pkt_tbl, pkts, port);
 
 		crypto_rx_handler();
 	}
