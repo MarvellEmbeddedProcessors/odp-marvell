@@ -38,7 +38,7 @@ extern "C" {
 /* TODO: reserve some rings for the LK */
 #define MVSAM_CIOS_RSRV		0x0
 #define MVSAM_RING_SIZE		256
-#define MVSAM_MAX_NUM_SESSIONS_PER_RING	2
+#define MVSAM_MAX_NUM_SESSIONS	32
 #define MVSAM_MULTI_SAM_ASYMMETRIC_MODE
 
 #define MUSDK_TOTAL_SHM_SIZE		(48 * 1024 * 1024)
