@@ -99,6 +99,7 @@ struct crypto_session {
 	odp_queue_t     compl_queue;
 	odp_pool_t      output_pool;
 	char            iv[MAX_IV_SIZE];
+	odp_crypto_op_t op;
 	struct crypto_cio_info*   cio;
 	struct sam_sa  *sa;
 };
@@ -111,9 +112,8 @@ struct crypto_request {
 	struct crypto_cio_info  *cio;
 };
 
-#define NUM_OF_THREADS            1
-#define MAX_NUM_OF_CIO_PER_WORKER 2
-#define MVSAM_MAX_NUM_SESSIONS    20
+#define MAX_NUM_OF_THREADS            2
+#define MAX_NUM_OF_CIO_PER_WORKER     2
 
 static uint8_t	used_cios[MAX_NUM_OF_CIO_PER_WORKER] = {MVSAM_CIOS_RSRV};
 
@@ -136,13 +136,13 @@ struct crypto_cio_info {
 
 struct crypto_thread_info
 {
-	struct crypto_session    sessions[MVSAM_MAX_NUM_SESSIONS];
 	unsigned int             app_enqs_cnt;
 	struct crypto_cio_info   cio[2];
 
 };
 
-static struct crypto_thread_info crp_thread[NUM_OF_THREADS];   /* TODO: add dynamic allocation for this array*/
+static struct crypto_thread_info crp_thread[MAX_NUM_OF_THREADS];   /* TODO: add dynamic allocation for this array*/
+struct crypto_session            sessions[MVSAM_MAX_NUM_SESSIONS];
 
 #endif /* ODP_PKTIO_MVSAM */
 
@@ -154,11 +154,11 @@ odp_crypto_generic_op_result_t *get_op_result_from_event(odp_event_t ev)
 }
 
 #ifdef ODP_PKTIO_MVSAM
-static struct crypto_cio_info* get_crp_thr_cio(struct crypto_thread_info *crp_thr, odp_crypto_session_params_t *params)
+static struct crypto_cio_info* get_crp_thr_cio(struct crypto_thread_info *crp_thr, odp_crypto_op_t op)
 {
 	int cio_idx = 0;
 	if(is_multi_sam())
-		cio_idx = ((params->op == ODP_CRYPTO_OP_ENCODE)? 0 : 1);
+		cio_idx = ((op == ODP_CRYPTO_OP_ENCODE)? 0 : 1);
 
 	return &crp_thr->cio[cio_idx];
 }
@@ -166,7 +166,7 @@ static struct crypto_cio_info* get_crp_thr_cio(struct crypto_thread_info *crp_th
 static inline struct crypto_thread_info *get_crp_thread(void)
 {
 	int thr_id = odp_thread_id() - 1;
-	if(odp_unlikely(thr_id > NUM_OF_THREADS)) {
+	if(odp_unlikely(thr_id > MAX_NUM_OF_THREADS)) {
 		ODP_ERR("invalid thread id. thr_id=%d!\n", thr_id);
 		return NULL;
 	}
@@ -229,26 +229,15 @@ static int mvsam_odp_crypto_session_create(
 	odp_crypto_ses_create_err_t *status)
 {
 	struct sam_session_params sam_session;
-	struct crypto_thread_info *crp_thr;
-	struct crypto_cio_info    *cio;
 	struct sam_sa *sa = NULL;
 	int           rc;
-	unsigned int  thr_id;
 
 	/* check we aren't pass the maximum number of sessions*/
-	if (odp_unlikely(num_session) == MVSAM_MAX_NUM_SESSIONS_PER_RING) {
+	if (odp_unlikely(num_session) == MVSAM_MAX_NUM_SESSIONS) {
 		ODP_ERR("reach maximum sessions. failed to create a new session!\n");
 		*status = -1;
 		return -1;
 	}
-	thr_id = odp_thread_id();
-	if(odp_unlikely(thr_id > NUM_OF_THREADS)) {
-		ODP_ERR("invalid thread id. thr_id=%d!\n", thr_id);
-		*status = -1;
-		return -1;
-	}
-
-	crp_thr = &crp_thread[thr_id];
 	memset(&sam_session, 0, sizeof(sam_session));
 	sam_session.proto          = SAM_PROTO_NONE; /* only algorithm offload */
 	sam_session.dir            = params->op;
@@ -265,26 +254,19 @@ static int mvsam_odp_crypto_session_create(
 		sam_session.u.basic.auth_aad_len = 0;
 	}
 
-	cio = get_crp_thr_cio(crp_thr, params);
-
-	if(odp_unlikely(cio == NULL)) {
-		ODP_ERR("error while get cio object!\n");
-		return -1;
-	}
-
-	rc = sam_session_create(cio->cio_hw, &sam_session, &sa);
+	rc = sam_session_create(&sam_session, &sa);
 	if(odp_unlikely(rc)) {
 		ODP_ERR("error while create new session\n");
 		*status = -1;
 		return -1;
 	}
 	ODP_DBG("crypto: session (%d) created\n", num_session);
-	crp_thr->sessions[num_session].compl_queue   = params->compl_queue;
-	crp_thr->sessions[num_session].output_pool   = params->output_pool;
-	crp_thr->sessions[num_session].sa            = sa;
-	crp_thr->sessions[num_session].cio           = cio;
-	memcpy(crp_thr->sessions[num_session].iv, sam_session.cipher_iv, MAX_IV_SIZE);
-	*session_out = (odp_crypto_session_t)&crp_thr->sessions[num_session++];
+	sessions[num_session].compl_queue   = params->compl_queue;
+	sessions[num_session].output_pool   = params->output_pool;
+	sessions[num_session].op            = params->op;
+	sessions[num_session].sa            = sa;
+	memcpy(sessions[num_session].iv, sam_session.cipher_iv, MAX_IV_SIZE);
+	*session_out = (odp_crypto_session_t)&sessions[num_session++];
 	*status = 0;
 	ODP_DBG("crypto: session-%d has created\n", num_session);
 	return rc;
@@ -292,9 +274,15 @@ static int mvsam_odp_crypto_session_create(
 
 static int mvsam_odp_crypto_session_destroy(odp_crypto_session_t session)
 {
-	NOTUSED(session);
-	ODP_UNIMPLEMENTED();
-	return -1;
+	int rc;
+	struct crypto_session *crp_session;
+	crp_session = (struct crypto_session *)session;
+	rc = sam_session_destroy(crp_session->sa);
+	if(odp_unlikely(rc)) {
+		ODP_ERR("error while destroy session\n");
+		return rc;
+	}
+	return 0;
 }
 
 static inline int mvsam_result_enq(struct sam_cio_op_result *sam_res, int num_res)
@@ -363,7 +351,6 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 	u16			 num_reqs;
 	int			 rc = 0, flush_io_qs = 0;
 	unsigned int tmp_offs, requests_offs, i;
-
 	NOTUSED(result);
 	crp_thr       = get_crp_thread();
 	if(odp_unlikely(crp_thr == NULL))
@@ -427,7 +414,7 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 		return 0;
 
 	session  = (struct crypto_session *)params->session;
-	cio           = session->cio;
+	cio = get_crp_thr_cio(crp_thr, session->op);
 	requests_offs = cio->requests_offs;
 
 	tmp_offs = requests_offs + 1;
@@ -490,7 +477,8 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 
 static int mvsam_odp_crypto_init_cio(int num_of_threads, int num_local_cios)
 {
-	struct sam_cio_params cio_params;
+	struct sam_cio_params  cio_params;
+	struct sam_init_params init_params;
 	int cio_id, err = 0, i, cio_local_idx;
 	char name[15];
 
@@ -498,9 +486,9 @@ static int mvsam_odp_crypto_init_cio(int num_of_threads, int num_local_cios)
 	memset(&cio_params, 0, sizeof(cio_params));
 	cio_params.match = name;
 	cio_params.size = MVSAM_RING_SIZE;
-	cio_params.num_sessions = MVSAM_MAX_NUM_SESSIONS_PER_RING;
-	/* TODO: what is the size of the buffer */
-	cio_params.max_buf_size = 2048;
+	init_params.max_num_sessions = MVSAM_MAX_NUM_SESSIONS;
+
+	sam_init(&init_params);
 	for(i = 0 ; i < num_of_threads ; i++) {
 		for(cio_local_idx = 0 ; cio_local_idx < num_local_cios ; cio_local_idx++) {
 			cio_id = find_free_cio(cio_local_idx);
@@ -530,10 +518,10 @@ static int mvsam_odp_crypto_init_global(void)
 #ifdef MVSAM_MULTI_SAM_ASYMMETRIC_MODE
 	sam_num_inst = sam_get_num_inst();
 #endif
-	err = mvsam_odp_crypto_init_cio(NUM_OF_THREADS, sam_num_inst);
+	err = mvsam_odp_crypto_init_cio(MAX_NUM_OF_THREADS, sam_num_inst);
 	ODP_DBG("crypto: allocate crp_op_request - %d\n", MVSAM_RING_SIZE);
 
-	for(i = 0 ; i < NUM_OF_THREADS ; i++) {
+	for(i = 0 ; i < MAX_NUM_OF_THREADS ; i++) {
 		memset(crp_thread[i].cio[0].sam_op_params, 0, sizeof(struct sam_cio_op_params));
 		memset(crp_thread[i].cio[1].sam_op_params, 0, sizeof(struct sam_cio_op_params));
 	}
@@ -543,7 +531,7 @@ static int mvsam_odp_crypto_init_global(void)
 static int mvsam_odp_crypto_term_global(void)
 {
 	unsigned int i, cio_local_idx;
-	for(i = 0 ; i < NUM_OF_THREADS ; i++) {
+	for(i = 0 ; i < MAX_NUM_OF_THREADS ; i++) {
 		for(cio_local_idx = 0 ; cio_local_idx < get_sam_cnt() ; cio_local_idx++)
 			sam_cio_deinit(crp_thread[i].cio[cio_local_idx].cio_hw);
 	}
