@@ -35,6 +35,9 @@
 /*#define USE_HW_BUFF_RECYLCE*/
 #define MAX_NUM_PACKPROCS		1
 #define BUFFER_RELEASE_BURST_SIZE	128
+#define PP2_SYSFS_RSS_PATH		"/sys/devices/platform/pp2/rss"
+#define PP2_SYSFS_RSS_NUM_TABLES_FILE	"num_rss_tables"
+#define PP2_MAX_BUF_STR_LEN		256
 
 #define upper_32_bits(n) ((u32)(((n) >> 16) >> 16))
 #define lower_32_bits(n) ((u32)(n))
@@ -133,6 +136,57 @@ static int find_free_bpool(void)
 	if (i == MVPP2_TOTAL_NUM_BPOOLS)
 		return -1;
 	return i;
+}
+
+static int mvpp2_sysfs_param_get(char *file)
+{
+	FILE *fp;
+	char buf[PP2_MAX_BUF_STR_LEN];
+	u32 param = 0, scanned;
+	char * buf_p;
+
+	fp = fopen(file, "r");
+	if (!fp) {
+		ODP_ERR("error opening file %s\n", file);
+		return -1;
+	}
+
+	buf_p = fgets(buf, sizeof(buf), fp);
+	if (!buf_p) {
+		ODP_ERR("fgets error trying to read sysfs\n");
+		fclose(fp);
+		return -1;
+	}
+
+	scanned = sscanf(buf, "%d\n", &param);
+	if (scanned != 1) {
+		ODP_ERR("Invalid number of parameters read %s\n", buf);
+		fclose(fp);
+		return -1;
+	}
+
+	fclose(fp);
+	return param;
+}
+
+static int mvpp2_rss_type_get(int hash_enable, odp_pktin_hash_proto_t hash_proto)
+{
+	/* TODO: once MUSDK API allows to configure hash per proto, need to change this
+	 * function accordingly */
+	if (hash_enable) {
+		/* TODO: Currently MUSDK only allows 5 tuple for UDP traffic */
+		if (hash_proto.proto.ipv4_udp ||
+		    hash_proto.proto.ipv6_udp)
+			return PP2_PPIO_HASH_T_5_TUPLE;
+
+		if (hash_proto.proto.ipv4_tcp ||
+		    hash_proto.proto.ipv6_tcp||
+		    hash_proto.proto.ipv4 ||
+		    hash_proto.proto.ipv6)
+			return PP2_PPIO_HASH_T_2_TUPLE;
+	}
+
+	return PP2_PPIO_HASH_T_NONE;
 }
 
 static int mvpp2_free_buf(odp_buffer_t buf)
@@ -272,6 +326,9 @@ static int mvpp2_init_global(void)
 {
 	struct pp2_init_params	pp2_params;
 	int			err;
+	char			file[PP2_MAX_BUF_STR_LEN];
+	int			num_rss_tables;
+
 
 	/* Master thread. Init locks */
 	odp_ticketlock_init(&thrs_lock);
@@ -280,6 +337,10 @@ static int mvpp2_init_global(void)
 	/* TODO: the following lines should be dynamic! */
 	pp2_params.hif_reserved_map = MVPP2_HIF_RSRV;
 	pp2_params.bm_pool_reserved_map = MVPP2_BPOOL_RSRV;
+
+	sprintf(file, "%s/%s", PP2_SYSFS_RSS_PATH, PP2_SYSFS_RSS_NUM_TABLES_FILE);
+	num_rss_tables = mvpp2_sysfs_param_get(file);
+	pp2_params.rss_tbl_reserved_map = (1 << num_rss_tables) - 1;
 
 	err = pp2_init(&pp2_params);
 	if (err != 0) {
@@ -381,13 +442,10 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 		      const char *devname,
 		      odp_pool_t pool)
 {
-	struct pp2_ppio_params		port_params;
-	struct pp2_ppio_inq_params	inq_params[MVPP2_MAX_NUM_QS_PER_TC];
 	struct pp2_bpool_params		bpool_params;
 	port_desc_t			port_desc;
-	odp_pktin_hash_proto_t		hash_proto;
 	char				name[15];
-	int				i, j, err, pool_id;
+	int				err, pool_id;
 
 	if (strlen(devname) > sizeof(name) - 1) {
 		ODP_ERR("Port name (%s) too long!\n", devname);
@@ -395,9 +453,11 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	}
 
 	memset(&port_desc, 0, sizeof(port_desc));
-	memset(name, 0, sizeof(name));
-	snprintf(name, sizeof(name), "%s", devname);
-	port_desc.name = name;
+
+	/* Set port name to pktio_entry */
+	snprintf(pktio_entry->s.name, sizeof(pktio_entry->s.name), "%s", devname);
+
+	port_desc.name = pktio_entry->s.name;
 	err = find_port_info(&port_desc);
 	if (err != 0) {
 		ODP_ERR("Port info not found!\n");
@@ -436,36 +496,6 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	pktio_entry->s.pkt_mvpp2.pool = pool;
 	pktio_entry->s.pkt_mvpp2.bpool_id = pool_id;
 
-	memset(name, 0, sizeof(name));
-	snprintf(name, sizeof(name), "ppio-%d:%d", port_desc.pp_id, port_desc.ppio_id);
-	memset(&port_params, 0, sizeof(port_params));
-	port_params.match = name;
-	port_params.type = PP2_PPIO_T_NIC;
-	port_params.inqs_params.num_tcs = MVPP2_MAX_NUM_TCS_PER_PORT;
-	for (i = 0; i < port_params.inqs_params.num_tcs; i++) {
-		port_params.inqs_params.tcs_params[i].pkt_offset = MVPP2_PACKET_OFFSET >> 2;
-		port_params.inqs_params.tcs_params[i].num_in_qs = MVPP2_MAX_NUM_QS_PER_TC;
-		memset(inq_params, 0, sizeof(inq_params));
-		for (j = 0; j < port_params.inqs_params.tcs_params[i].num_in_qs; j++)
-			inq_params[j].size = MVPP2_RXQ_SIZE;
-		port_params.inqs_params.tcs_params[i].inqs_params = inq_params;
-		port_params.inqs_params.tcs_params[i].pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
-	}
-	port_params.outqs_params.num_outqs = MVPP2_MAX_NUM_TCS_PER_PORT;
-	for (i = 0; i < port_params.outqs_params.num_outqs; i++) {
-		port_params.outqs_params.outqs_params[i].size = MVPP2_TXQ_SIZE;
-		port_params.outqs_params.outqs_params[i].weight = 1;
-	}
-	err = pp2_ppio_init(&port_params, &pktio_entry->s.pkt_mvpp2.ppio);
-	if (err != 0) {
-		ODP_ERR("PP-IO init failed!\n");
-		return -1;
-	}
-	if (!pktio_entry->s.pkt_mvpp2.ppio) {
-		ODP_ERR("PP-IO init failed!\n");
-		return -1;
-	}
-
 	pool_entry_t *poole = get_pool_entry(pool_handle_to_index(pool));
 	/* Allocate maximum sized packets */
 	/* Allocate half of the SW pool into the HW pool; i.e. allow only 2 ports sharing the same SW pool */
@@ -482,13 +512,6 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	if (pktio_entry->s.pkt_mvpp2.sockfd == -1) {
 		ODP_ERR("Cannot get device control socket\n");
 		return -1;
-	}
-
-	/* TODO: temporary until we have appropriate implementation for RSS */
-	/* Check if RSS is supported. If not, set 'max_input_queues' to 1. */
-	if (rss_conf_get_supported_fd(pktio_entry->s.pkt_mvpp2.sockfd, devname, &hash_proto) == 0) {
-		ODP_PRINT("RSS not supported\n");
-		pktio_entry->s.pkt_mvpp2.capa.max_input_queues = 1;
 	}
 
 	/* TODO: temporary until we have ppio_get_mac_addr() */
@@ -519,16 +542,62 @@ static int mvpp2_close(pktio_entry_t *pktio_entry)
 
 static int mvpp2_start(pktio_entry_t *pktio_entry)
 {
+	char				name[15];
+	port_desc_t			port_desc;
+	int				i, j, err;
+	struct pp2_ppio_params		port_params;
+	struct pp2_ppio_inq_params	inq_params[MVPP2_MAX_NUM_QS_PER_TC];
+
 	if (!pktio_entry->s.num_in_queue && !pktio_entry->s.num_out_queue) {
 		ODP_ERR("No input and output queues configured!\n");
 		return -1;
 	}
 
+	port_desc.name = pktio_entry->s.name;
+	err = find_port_info(&port_desc);
+	if (err != 0) {
+		ODP_ERR("Port info not found!\n");
+		return -1;
+	}
+
+	memset(name, 0, sizeof(name));
+	snprintf(name, sizeof(name), "ppio-%d:%d", port_desc.pp_id, port_desc.ppio_id);
+	memset(&port_params, 0, sizeof(port_params));
+	port_params.match = name;
+	port_params.type = PP2_PPIO_T_NIC;
+
+	port_params.inqs_params.hash_type = pktio_entry->s.pkt_mvpp2.hash_type;
+	ODP_DBG("hash_type %d\n", port_params.inqs_params.hash_type);
+
+	port_params.inqs_params.num_tcs = MVPP2_MAX_NUM_TCS_PER_PORT;
+	for (i = 0; i < port_params.inqs_params.num_tcs; i++) {
+		port_params.inqs_params.tcs_params[i].pkt_offset = MVPP2_PACKET_OFFSET >> 2;
+		port_params.inqs_params.tcs_params[i].num_in_qs = pktio_entry->s.num_in_queue;
+		memset(inq_params, 0, sizeof(inq_params));
+		for (j = 0; j < port_params.inqs_params.tcs_params[i].num_in_qs; j++)
+			inq_params[j].size = MVPP2_RXQ_SIZE;
+		port_params.inqs_params.tcs_params[i].inqs_params = inq_params;
+		port_params.inqs_params.tcs_params[i].pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
+	}
+	port_params.outqs_params.num_outqs = MVPP2_MAX_NUM_TCS_PER_PORT;
+	for (i = 0; i < port_params.outqs_params.num_outqs; i++) {
+		port_params.outqs_params.outqs_params[i].size = MVPP2_TXQ_SIZE;
+		port_params.outqs_params.outqs_params[i].weight = 1;
+	}
+	err = pp2_ppio_init(&port_params, &pktio_entry->s.pkt_mvpp2.ppio);
+	if (err != 0) {
+		ODP_ERR("PP-IO init failed!\n");
+		return -1;
+	}
+	if (!pktio_entry->s.pkt_mvpp2.ppio) {
+		ODP_ERR("PP-IO init failed!\n");
+		return -1;
+	}
+
 	pp2_ppio_enable(pktio_entry->s.pkt_mvpp2.ppio);
 
-	ODP_PRINT("PktIO PP2 has %d RxTCs with %d RxQs each and %d TxTCs\n",
+	ODP_PRINT("PktIO PP2 has %d RxTCs and %d TxTCs\n",
 		  MVPP2_MAX_NUM_TCS_PER_PORT,
-		  MVPP2_MAX_NUM_QS_PER_TC,
 		  MVPP2_MAX_NUM_TCS_PER_PORT);
 	ODP_PRINT("\t mapped to %d RxQs and %d TxQs!!!\n",
 		  pktio_entry->s.num_in_queue, pktio_entry->s.num_out_queue);
@@ -558,7 +627,8 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 				     const odp_pktin_queue_param_t *param)
 {
 	u32	 max_num_hwrx_qs;
-	int		 i, max_num_hwrx_qs_per_inq;
+	u32	 i;
+	u8	 max_num_hwrx_qs_per_inq;
 	u32	 num_rxq = param->num_queues;
 
 	ODP_ASSERT(num_rxq == pktio_entry->s.num_in_queue);
@@ -577,20 +647,16 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 			max_num_hwrx_qs);
 		return -1;
 	}
-	if (max_num_hwrx_qs % pktio_entry->s.num_in_queue) {
-		ODP_ERR("Invalid Queue mapping (%d vs %d)!\n",
-			pktio_entry->s.num_in_queue,
-			max_num_hwrx_qs);
-		return -1;
-	}
 
-	max_num_hwrx_qs_per_inq = max_num_hwrx_qs / pktio_entry->s.num_in_queue;
-	for (i = 0; i < MVPP2_MAX_NUM_QS_PER_TC; i++) {
+	max_num_hwrx_qs_per_inq = 1;	/* each logical queue is mapped to one phy queue */
+	for (i = 0; i < pktio_entry->s.num_in_queue; i++) {
 		pktio_entry->s.pkt_mvpp2.inqs[i].first_tc = 0;
 		pktio_entry->s.pkt_mvpp2.inqs[i].num_tcs = 1;
 		pktio_entry->s.pkt_mvpp2.inqs[i].first_qid = (i * max_num_hwrx_qs_per_inq);
 		pktio_entry->s.pkt_mvpp2.inqs[i].next_qid = pktio_entry->s.pkt_mvpp2.inqs[i].first_qid;
 		pktio_entry->s.pkt_mvpp2.inqs[i].num_qids = max_num_hwrx_qs_per_inq;
+		ODP_DBG("inqs[%d] first_qid %d, num_qids %d\n", i, pktio_entry->s.pkt_mvpp2.inqs[i].first_qid,
+		       pktio_entry->s.pkt_mvpp2.inqs[i].num_qids);
 
 		/* Scheduler synchronizes input queue polls. Only single thread
 		* at a time polls a queue
@@ -602,6 +668,9 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 		if (!pktio_entry->s.pkt_mvpp2.inqs[i].lockless)
 			odp_ticketlock_init(&pktio_entry->s.pkt_mvpp2.inqs[i].lock);
 	}
+
+	/* RSS support */
+	pktio_entry->s.pkt_mvpp2.hash_type = mvpp2_rss_type_get(param->hash_enable, param->hash_proto);
 
 	return 0;
 }

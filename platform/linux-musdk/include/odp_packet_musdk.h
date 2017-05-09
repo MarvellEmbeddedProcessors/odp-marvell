@@ -53,6 +53,7 @@ typedef struct {
 	int			 num_out_queues;
 	struct tx_shadow_q	 shadow_qs[MVPP2_TOTAL_NUM_HIFS][MAX_NUM_OUTQS_PER_CORE];
 	struct inq_info		 inqs[MVPP2_MAX_NUM_QS_PER_TC];
+	enum pp2_ppio_hash_type	 hash_type;
 } pkt_mvpp2_t;
 
 #endif /* ODP_PACKET_MUSDK_H_ */
