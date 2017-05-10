@@ -535,7 +535,7 @@ static int mvsam_odp_crypto_term_global(void)
 		for(cio_local_idx = 0 ; cio_local_idx < get_sam_cnt() ; cio_local_idx++)
 			sam_cio_deinit(crp_thread[i].cio[cio_local_idx].cio_hw);
 	}
-
+	sam_deinit();
 	return 0;
 }
 #endif /* ODP_PKTIO_MVSAM */
