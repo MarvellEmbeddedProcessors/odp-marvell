@@ -12,7 +12,9 @@
 #include <odp_packet_musdk.h>
 #include <odp_packet_socket.h>
 #include <odp_debug_internal.h>
-#include <protocols/eth.h>
+#include <odp/helper/eth.h>
+#include <odp/helper/ip.h>
+
 
 #include <odp/api/ticketlock.h>
 #include <odp_pool_internal.h>
@@ -346,6 +348,32 @@ static void init_capability(pktio_entry_t *pktio_entry)
 	capa->loop_supported = true;
 	capa->set_op.op.promisc_mode = true;
 	odp_pktio_config_init(&capa->config);
+
+	/* L3, L4 checksum offload on TX */
+	capa->config.pktout.bit.ipv4_chksum = 1;
+	capa->config.pktout.bit.udp_chksum = 1;
+	capa->config.pktout.bit.tcp_chksum = 1;
+	/* TODO - need to check if HW perfrom checksum generation for this type
+	* capa->config.pktout.bit.sctp_chksum = 1;
+	*/
+
+	/* L3, L4 checksum offload on RX */
+	capa->config.pktin.bit.ipv4_chksum = 1;
+	capa->config.pktin.bit.udp_chksum = 1;
+	capa->config.pktin.bit.tcp_chksum = 1;
+	/* HW alwyas generate checksum error for non UDP/TCP frames
+	* capa->config.pktin.bit.sctp_chksum = 1;
+	*/
+	capa->config.pktin.bit.drop_ipv4_err = 1;
+	/* TODO - probably need to parse it in SW to support it
+	* capa->config.pktin.bit.drop_ipv6_err = 1;
+	*/
+	capa->config.pktin.bit.drop_udp_err = 1;
+	capa->config.pktin.bit.drop_tcp_err = 1;
+	/* TODO - need to check if HW perfrom checksum validation for this type.
+	* if so, in SW need to identify it by looking at ip-protocol.
+	* capa->config.pktin.bit.drop_sctp_err = 1;
+	*/
 }
 
 static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
@@ -629,7 +657,6 @@ static int mvpp2_mac_get(pktio_entry_t *pktio_entry,
 static int mvpp2_promisc_mode_set(pktio_entry_t *pktio_entry,  int enable)
 {
 	int err;
-
 	err = pp2_ppio_set_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, enable);
 	if (err) {
 		err = -1;
@@ -653,14 +680,12 @@ static int mvpp2_promisc_mode_get(pktio_entry_t *pktio_entry)
 static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 {
 	/* Returns false (zero) if link is down or true(one) if link is up */
-
 	int err, link_up = 0;
 
 	err = pp2_ppio_get_link_state(pktio_entry->s.pkt_mvpp2.ppio, &link_up);
 	if (err) {
 		link_up = -1;
 	}
-
 	return link_up;
 }
 
@@ -752,12 +777,11 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	odp_packet_t		 pkt;
 	struct pp2_ppio_desc	 descs[MVPP2_MAX_RX_BURST_SIZE];
 	u16			 i, j, num, total_got, len;
-#if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
 	enum pp2_inq_l3_type	 l3_type;
 	enum pp2_inq_l4_type	 l4_type;
 	u8			 l3_offset, l4_offset;
-#endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
 	u8			 tc, qid, num_qids, last_qid;
+	enum pp2_inq_desc_status desc_err;
 
 	total_got = 0;
 	if (num_pkts > (MVPP2_MAX_RX_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_TC))
@@ -776,36 +800,81 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		if (num > MVPP2_MAX_RX_BURST_SIZE)
 			num = MVPP2_MAX_RX_BURST_SIZE;
 		pp2_ppio_recv(pktio_entry->s.pkt_mvpp2.ppio, tc, qid, descs, &num);
-		for (j = 0; j < num; j++, total_got++) {
+		for (j = 0; j < num; j++) {
 			pkt_table[total_got] = (odp_packet_t)pp2_ppio_inq_desc_get_cookie(&descs[j]);
 			len = pp2_ppio_inq_desc_get_pkt_len(&descs[j]);
-#if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
-			pp2_ppio_inq_desc_get_l3_info(&descs[j], &l3_type, &l3_offset);
-			pp2_ppio_inq_desc_get_l4_info(&descs[j], &l4_type, &l4_offset);
-#endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
 
 			pkt = pkt_table[total_got];
 			pkt_hdr = odp_packet_hdr(pkt);
 
 			odp_packet_reset(pkt, len);
+			pkt_hdr->input = pktio_entry->s.handle;
+			pkt_hdr->p.parsed_layers = LAYER_ALL;
+
+			pp2_ppio_inq_desc_get_l3_info(&descs[j], &l3_type, &l3_offset);
+			pp2_ppio_inq_desc_get_l4_info(&descs[j], &l4_type, &l4_offset);
+
+			desc_err = pp2_ppio_inq_desc_get_l2_pkt_error(&descs[j]);
+			if (odp_unlikely(desc_err != PP2_DESC_ERR_OK)) {
+				/* Always drop L2 errors */
+				ODP_DBG("Drop packet with L2 error: %d", desc_err);
+				odp_packet_free(pkt);
+				continue;
+			}
+
+			desc_err = pp2_ppio_inq_desc_get_l3_pkt_error(&descs[j]);
+			if (odp_unlikely(desc_err == PP2_DESC_ERR_IPV4_HDR)) {
+				pkt_hdr->p.error_flags.ip_err = 1;
+				if (odp_unlikely(pktio_entry->s.config.pktin.bit.ipv4_chksum == 0)) {
+					/* Need to parse IPv4. if the error is actually from checksum than need to unset
+					* the error flag. */
+					odp_packet_l3_offset_set(pkt, l3_offset);
+					if (odp_likely(!odph_ipv4_csum_valid(pkt)))
+						pkt_hdr->p.error_flags.ip_err = 0;
+				}
+				if (odp_likely(pktio_entry->s.config.pktin.bit.drop_ipv4_err &&
+					pkt_hdr->p.error_flags.ip_err)) {
+					ODP_DBG("Drop packet with L3 error: %d", desc_err);
+					odp_packet_free(pkt);
+					continue;
+				}
+			}
+
+			desc_err = pp2_ppio_inq_desc_get_l4_pkt_error(&descs[j]);
+			if (odp_unlikely(desc_err == PP2_DESC_ERR_L4_CHECKSUM)) {
+				pkt_hdr->p.error_flags.udp_err = ((l4_type == PP2_INQ_L4_TYPE_UDP) &&
+					(pktio_entry->s.config.pktin.bit.udp_chksum));
+				pkt_hdr->p.error_flags.tcp_err = ((l4_type == PP2_INQ_L4_TYPE_TCP) &&
+					(pktio_entry->s.config.pktin.bit.tcp_chksum));
+				if (odp_unlikely((pkt_hdr->p.error_flags.udp_err &&
+						  pktio_entry->s.config.pktin.bit.drop_udp_err) ||
+					(pkt_hdr->p.error_flags.tcp_err &&
+					 pktio_entry->s.config.pktin.bit.drop_tcp_err))) {
+					ODP_DBG("Drop packet with L4 error: %d", desc_err);
+					odp_packet_free(pkt);
+					continue;
+				}
+			}
+
+			total_got++;
 			/* TODO: set appropriate headroom */
 			packet_parse_l2(&pkt_hdr->p, len);
 
-#if defined(MVPP2_PKT_PARSE_SUPPORT) && (MVPP2_PKT_PARSE_SUPPORT == 1)
 			odp_packet_l3_offset_set(pkt, l3_offset);
 			if (odp_likely(l3_type)) {
+				odp_packet_has_l3_set(pkt, 1);
 				if (l3_type < PP2_INQ_L3_TYPE_IPV4_TTL_ZERO)
 					odp_packet_has_ipv4_set(pkt, 1);
 				else
 					odp_packet_has_ipv6_set(pkt, 1);
 				odp_packet_l4_offset_set(pkt, l4_offset);
+				if (odp_likely(l4_type))
+					odp_packet_has_l4_set(pkt, 1);
 				if (odp_likely(l4_type == PP2_INQ_L4_TYPE_TCP))
 					odp_packet_has_tcp_set(pkt, 1);
 				else if (odp_likely(l4_type == PP2_INQ_L4_TYPE_UDP))
 					odp_packet_has_udp_set(pkt, 1);
 			}
-#endif /* defined(MVPP2_PKT_PARSE_SUPPORT) && ... */
-			pkt_hdr->input = pktio_entry->s.handle;
 		}
 		if (odp_unlikely(qid++ == last_qid))
 			qid = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].first_qid;
@@ -837,6 +906,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	int			 err, sent = 0;
 	pkt_mvpp2_t		*pkt_mvpp2 = &pktio_entry->s.pkt_mvpp2;
 	pktio_entry_t 		*input_entry;
+	struct odp_pktio_config_t *config = &pktio_entry->s.config;
 
 	/* TODO: only support now RSS; no support for QoS; how to translate txq_id to tc/hif???? */
 	tc = 0;
@@ -866,7 +936,6 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		pp2_ppio_outq_desc_set_pkt_offset(&descs[idx], odp_packet_headroom(pkt));
 		pp2_ppio_outq_desc_set_pkt_len(&descs[idx], len);
 
-#if defined(MVPP2_CSUM_OFF_SUPPORT) && (MVPP2_CSUM_OFF_SUPPORT == 1)
 		/* Update the slot for csum_offload */
 		if (odp_likely(pkt_hdr->p.l3_offset != ODP_PACKET_OFFSET_INVALID)) {
 			enum pp2_outq_l3_type l3_type =
@@ -881,16 +950,16 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 									  PP2_OUTQ_L4_TYPE_TCP,
 									  pkt_hdr->p.l3_offset,
 									  pkt_hdr->p.l4_offset,
-									  1,
-									  1);
+									  config->pktout.bit.ipv4_chksum,
+									  config->pktout.bit.tcp_chksum);
 				else if (odp_likely(pkt_hdr->p.input_flags.udp))
 					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
 									  l3_type,
 									  PP2_OUTQ_L4_TYPE_UDP,
 									  pkt_hdr->p.l3_offset,
 									  pkt_hdr->p.l4_offset,
-									  1,
-									  1);
+									  config->pktout.bit.ipv4_chksum,
+									  config->pktout.bit.udp_chksum);
 				else
 					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
 									  l3_type,
@@ -901,7 +970,6 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 									  0);
 			}
 		}
-#endif /* defined(MVPP2_CSUM_OFF_SUPPORT) && ... */
 
 #ifdef USE_HW_BUFF_RECYLCE
 		pp2_ppio_outq_desc_set_cookie(&descs[idx], lower_32_bits((u64)(uintptr_t)pkt));
@@ -935,6 +1003,23 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	return sent;
 }
 
+static int mvpp2_config(pktio_entry_t *pktio_entry ODP_UNUSED, const odp_pktio_config_t *config)
+{
+	ODP_PRINT("RX checksum offload configuration: IPv4 (%u), UDP (%u), TCP (%u), SCTP (%u)\n",
+		config->pktin.bit.ipv4_chksum, config->pktin.bit.udp_chksum,
+		config->pktin.bit.tcp_chksum, config->pktin.bit.sctp_chksum);
+	ODP_PRINT("TX checksum offload configuration: IPv4 (%u), UDP (%u), TCP (%u), SCTP (%u)\n",
+		config->pktout.bit.ipv4_chksum, config->pktout.bit.udp_chksum,
+		config->pktout.bit.tcp_chksum, config->pktout.bit.sctp_chksum);
+	ODP_PRINT("RX Dropping offload capability: IPv4 (%u), UDP (%u), TCP (%u), SCTP (%u)\n",
+		config->pktin.bit.drop_ipv4_err, config->pktin.bit.drop_udp_err,
+		config->pktin.bit.drop_tcp_err, config->pktin.bit.drop_sctp_err);
+
+	/* TODO: Verify if RX DMA can be configure to drop on checksum error, by calling a proper MuSDK API.*/
+
+	return 0;
+}
+
 const pktio_if_ops_t mvpp2_pktio_ops = {
 	.name = "odp-mvpp2",
 	.print = NULL,
@@ -946,7 +1031,7 @@ const pktio_if_ops_t mvpp2_pktio_ops = {
 	.start = mvpp2_start,
 	.stop = mvpp2_stop,
 	.capability = mvpp2_capability,
-	.config = NULL,
+	.config = mvpp2_config,
 	.input_queues_config = mvpp2_input_queues_config,
 	.output_queues_config = mvpp2_output_queues_config,
 	.stats = mvpp2_stats,
