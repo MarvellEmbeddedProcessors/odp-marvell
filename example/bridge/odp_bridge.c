@@ -23,6 +23,7 @@
 #include <arpa/inet.h>
 
 #include <odp_api.h>
+#include <odp_debug_internal.h>
 #include <odp/helper/linux.h>
 #include <odp/helper/eth.h>
 #include <odp/helper/ip.h>
@@ -37,7 +38,7 @@
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
  */
-#define SHM_PKT_POOL_SIZE      2048
+#define SHM_PKT_POOL_SIZE      1024
 
 /** @def SHM_PKT_POOL_BUF_SIZE
  * @brief Buffer size of the packet pool buffer
@@ -617,41 +618,19 @@ static void bind_workers(void)
 	for (rx_idx = 0; rx_idx < if_count; rx_idx++)
 		gbl_args->dst_port[rx_idx] = find_dest_port(rx_idx);
 
-	if (if_count > num_workers) {
-		thr = 0;
+	for (thr = 0; thr < num_workers; thr++) {
+		thr_args = &gbl_args->thread[thr];
+		pktio    = thr_args->num_pktio;
 
 		for (rx_idx = 0; rx_idx < if_count; rx_idx++) {
-			thr_args = &gbl_args->thread[thr];
-			pktio    = thr_args->num_pktio;
 			tx_idx   = gbl_args->dst_port[rx_idx];
 			thr_args->pktio[pktio].rx_idx = rx_idx;
 			thr_args->pktio[pktio].tx_idx = tx_idx;
 			thr_args->num_pktio++;
+			pktio = thr_args->num_pktio;
 
 			gbl_args->pktios[rx_idx].num_rx_thr++;
 			gbl_args->pktios[tx_idx].num_tx_thr++;
-
-			thr++;
-			if (thr >= num_workers)
-				thr = 0;
-		}
-	} else {
-		rx_idx = 0;
-
-		for (thr = 0; thr < num_workers; thr++) {
-			thr_args = &gbl_args->thread[thr];
-			pktio    = thr_args->num_pktio;
-			tx_idx   = gbl_args->dst_port[rx_idx];
-			thr_args->pktio[pktio].rx_idx = rx_idx;
-			thr_args->pktio[pktio].tx_idx = tx_idx;
-			thr_args->num_pktio++;
-
-			gbl_args->pktios[rx_idx].num_rx_thr++;
-			gbl_args->pktios[tx_idx].num_tx_thr++;
-
-			rx_idx++;
-			if (rx_idx >= if_count)
-				rx_idx = 0;
 		}
 	}
 }
@@ -963,6 +942,13 @@ int main(int argc, char *argv[])
 	if (gbl_args->appl.cpu_count)
 		num_workers = gbl_args->appl.cpu_count;
 
+	/* WA: don't reserve CPU for control plan and Linux */
+	odp_cpumask_zero(&odp_global_data.worker_cpus);
+	odp_cpumask_zero(&odp_global_data.control_cpus);
+	odp_cpumask_set(&odp_global_data.control_cpus, 0);
+	for (i = 0; i < odp_global_data.num_cpus_installed; i++)
+		odp_cpumask_set(&odp_global_data.worker_cpus, i);
+
 	/* Get default worker cpumask */
 	num_workers = odp_cpumask_default_worker(&cpumask, num_workers);
 	(void)odp_cpumask_to_str(&cpumask, cpumaskstr, sizeof(cpumaskstr));
@@ -982,7 +968,7 @@ int main(int argc, char *argv[])
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
-	params.pkt.num     = SHM_PKT_POOL_SIZE;
+	params.pkt.num     = SHM_PKT_POOL_SIZE * num_workers;
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
