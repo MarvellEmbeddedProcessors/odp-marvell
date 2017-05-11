@@ -18,11 +18,13 @@
 ODP_STATIC_ASSERT((ODP_VAL_IS_POWER_2(SHADOW_Q_MAX_SIZE)), "SHADOW_Q_MAX_SIZE should be power of 2");
 
 struct tx_shadow_q {
-	u16				 read_ind;		/* read index - used when releasing buffers */
-	u16				 write_ind;		/* write index - used when sending buffers */
-	u16				 size;			/* queue occupied size */
-	u16				 num_to_release;	/* number of buffers sent, that can be released */
-	struct buff_release_entry	 ent[SHADOW_Q_MAX_SIZE];/* queue entries */
+	u16				read_ind;		/* read index - used when releasing buffers */
+	u16				write_ind;		/* write index - used when sending buffers */
+	int				lockless;
+	odp_ticketlock_t		lock;			/**< Queue lock */
+	u16				size;			/* queue occupied size */
+	u16				num_to_release;		/* number of buffers sent, that can be released */
+	struct buff_release_entry	ent[SHADOW_Q_MAX_SIZE];	/* queue entries */
 };
 
 struct inq_info {
