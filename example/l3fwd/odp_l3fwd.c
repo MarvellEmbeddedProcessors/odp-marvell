@@ -14,6 +14,7 @@
 #include <test_debug.h>
 
 #include <odp_api.h>
+#include <odp_debug_internal.h>
 #include <odp/helper/linux.h>
 #include <odp/helper/eth.h>
 #include <odp/helper/ip.h>
@@ -413,6 +414,25 @@ einval_error:
 	return -1;
 }
 
+static int queues_config(app_args_t *args)
+{
+	int i, j;
+	int nb_qconfs = 0;
+	struct l3fwd_qconf_s *qconf_array = &args->qconf_config[0];
+
+	for (i = 0; i < args->if_count; i++) {
+		for (j = 0; j < args->worker_count; j++) {
+			qconf_array[nb_qconfs].if_idx = i;
+			qconf_array[nb_qconfs].rxq_idx = j;
+			qconf_array[nb_qconfs].core_idx = j;
+			++nb_qconfs;
+		}
+	}
+	args->qconf_count = nb_qconfs;
+
+	return 0;
+}
+
 static int parse_config(char *cfg_str, app_args_t *args)
 {
 	char s[256];
@@ -503,7 +523,7 @@ static void print_usage(char *progname)
 
 static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 {
-	int opt;
+	int opt, qconfig = 0;
 	int long_index;
 	char *token, *local;
 	size_t len, route_index = 0;
@@ -618,12 +638,16 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 
 		case 'q':
 			parse_config(optarg, args);
+			qconfig = 1;
 			break;
 
 		default:
 			break;
 		}
 	}
+
+	if (!qconfig)
+		queues_config(args);
 
 	/* checking arguments */
 	if (args->if_count == 0) {
@@ -1019,7 +1043,7 @@ int main(int argc, char **argv)
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = POOL_SEG_LEN;
 	params.pkt.len     = POOL_SEG_LEN;
-	params.pkt.num     = POOL_NUM_PKT;
+	params.pkt.num     = POOL_NUM_PKT * args->worker_count;
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
@@ -1051,6 +1075,14 @@ int main(int argc, char **argv)
 	nb_worker = MAX_NB_WORKER;
 	if (args->worker_count)
 		nb_worker = args->worker_count;
+
+	/* WA: don't reserve CPU for control plan and Linux */
+	odp_cpumask_zero(&odp_global_data.worker_cpus);
+	odp_cpumask_zero(&odp_global_data.control_cpus);
+	odp_cpumask_set(&odp_global_data.control_cpus, 0);
+	for (i = 0; i < odp_global_data.num_cpus_installed; i++)
+		odp_cpumask_set(&odp_global_data.worker_cpus, i);
+
 	nb_worker = odp_cpumask_default_worker(&cpumask, nb_worker);
 	args->worker_count = nb_worker;
 
