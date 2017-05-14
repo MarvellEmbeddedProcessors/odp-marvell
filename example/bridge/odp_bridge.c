@@ -57,6 +57,19 @@
 
 #define PREFETCH_SHIFT         6
 
+enum checksum_offload_mode {
+	CHECKSUM_OFFLOAD_MODE_DISABLE = 0,	/* Don't apply checksum offload (default) */
+	CHECKSUM_OFFLOAD_MODE_VALIDATION,	/* apply checksum validation (RX) */
+	CHECKSUM_OFFLOAD_MODE_GENERATION,	/* apply checksum generation (TX) */
+	CHECKSUM_OFFLOAD_MODE_ALL,		/* apply checksum RX & TX */
+};
+
+enum error_mode {
+	ERROR_MODE_CHECK_DISABLE = 0,	/* Don't check packet errors (default) */
+	ERROR_MODE_CHECK_N_DROP_APP,	/* Check packet errors and Drop in App */
+	ERROR_MODE_CHECK_N_DROP_ODP,	/* Check packet errors and Drop in ODP */
+};
+
 
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
@@ -73,7 +86,8 @@ typedef struct {
 	int time;		/**< Time in seconds to run. */
 	int accuracy;		/**< Number of seconds to get and print statistics */
 	char *if_str;		/**< Storage for interface names */
-	int error_check;        /**< Check packet errors */
+	enum error_mode error_mode; /**< Check packet errors */
+	enum checksum_offload_mode checksum_offload; /**< Checksum offload */
 	int echo;	        /**< Echo packet */
 
 } appl_args_t;
@@ -203,6 +217,10 @@ static inline int drop_err_pkts(odp_packet_t pkt_tbl[], unsigned num)
 		pkt = pkt_tbl[i];
 
 		if (odp_unlikely(odp_packet_has_error(pkt))) {
+			printf("(L2 %s, L3 %s, L4 %s)\n",
+				odp_packet_has_l2_error(pkt) ? "error" : "correct",
+				odp_packet_has_l3_error(pkt) ? "error" : "correct",
+				odp_packet_has_l4_error(pkt) ? "error" : "correct");
 			odp_packet_free(pkt); /* Drop */
 			dropped++;
 		} else if (odp_unlikely(i != j++)) {
@@ -256,7 +274,7 @@ static int run_worker(void *arg)
 		if (odp_unlikely(pkts <= 0))
 			continue;
 
-		if (gbl_args->appl.error_check) {
+		if (gbl_args->appl.error_mode != ERROR_MODE_CHECK_DISABLE) {
 			int rx_drops;
 
 			/* Drop packets with errors */
@@ -322,6 +340,7 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	odp_pktio_t pktio;
 	odp_pktio_param_t pktio_param;
 	odp_pktio_capability_t capa;
+	odp_pktio_config_t config;
 	odp_pktin_queue_param_t pktin_param;
 	odp_pktout_queue_param_t pktout_param;
 	odp_pktio_op_mode_t mode_rx;
@@ -343,6 +362,41 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 		printf("Error: capability query failed %s\n", dev);
 		return -1;
 	}
+
+	printf("RX checksum offload capability: IPv4 (%u), UDP (%u), TCP (%u), SCTP (%u)\n",
+		capa.config.pktin.bit.ipv4_chksum, capa.config.pktin.bit.udp_chksum,
+		capa.config.pktin.bit.tcp_chksum, capa.config.pktin.bit.sctp_chksum);
+	printf("TX checksum offload capability: IPv4 (%u), UDP (%u), TCP (%u), SCTP (%u)\n",
+		capa.config.pktout.bit.ipv4_chksum, capa.config.pktout.bit.udp_chksum,
+		capa.config.pktout.bit.tcp_chksum, capa.config.pktout.bit.sctp_chksum);
+	printf("RX Dropping offload capability: IPv4 (%u), UDP (%u), TCP (%u), SCTP (%u)\n",
+		capa.config.pktin.bit.drop_ipv4_err, capa.config.pktin.bit.drop_udp_err,
+		capa.config.pktin.bit.drop_tcp_err, capa.config.pktin.bit.drop_sctp_err);
+
+	odp_pktio_config_init(&config);
+	if ((gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_VALIDATION) ||
+		(gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_ALL)) {
+		config.pktin.bit.ipv4_chksum = 1;
+		config.pktin.bit.udp_chksum = 1;
+		config.pktin.bit.tcp_chksum = 1;
+	}
+	if ((gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_GENERATION) ||
+		(gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_ALL)) {
+		config.pktout.bit.ipv4_chksum = 1;
+		config.pktout.bit.udp_chksum = 1;
+		config.pktout.bit.tcp_chksum = 1;
+	}
+	if (gbl_args->appl.error_mode == ERROR_MODE_CHECK_N_DROP_ODP) {
+		config.pktin.bit.drop_ipv4_err = 1;
+		config.pktin.bit.drop_udp_err = 1;
+		config.pktin.bit.drop_tcp_err = 1;
+	}
+
+	if (odp_pktio_config(pktio, &config)) {
+		printf("Error: config failed %s\n", dev);
+		return -1;
+	}
+
 
 	odp_pktin_queue_param_init(&pktin_param);
 	odp_pktout_queue_param_init(&pktout_param);
@@ -674,8 +728,13 @@ static void usage(char *progname)
 	       "  -t, --time  <number> Time in seconds to run.\n"
 	       "  -a, --accuracy <number> Time in seconds get print statistics\n"
 	       "                          (default is 1 second).\n"
-	       "  -e, --error_check 0: Don't check packet errors (default)\n"
-	       "                    1: Check packet errors\n"
+	       "  -e, --error_mode 0: Don't check packet errors (default)\n"
+	       "					 1: Check packet errors and Drop in App\n"
+	       "					 2: Check packet errors and Drop in ODP\n"
+	       "  -C, --checksum_offload 0: Don't apply checksum offload (default)\n"
+	       "					  1: apply checksum validation (RX)\n"
+		   "					  2: apply checksum generation (TX)\n"
+		   "					  3: apply checksum RX & TX\n"
 	       "  -E, --echo Echo packet\n"
 	       "  -h, --help           Display help and exit.\n\n"
 	       "\n", NO_PATH(progname), NO_PATH(progname), MAX_PKTIOS
@@ -702,20 +761,22 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"time", required_argument, NULL, 't'},
 		{"accuracy", required_argument, NULL, 'a'},
 		{"interface", required_argument, NULL, 'i'},
-		{"error_check", required_argument, NULL, 'e'},
+		{"error_mode", required_argument, NULL, 'e'},
+		{"checksum_offload", required_argument, NULL, 'C'},
 		{"echo", no_argument, NULL, 'E'},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts =  "+c:+t:+a:i:e:Eh";
+	static const char *shortopts =  "+c:+t:+a:i:e:C:Eh";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
 	odph_parse_options(argc, argv, shortopts, longopts);
 
 	appl_args->time = 0; /* loop forever if time to run is 0 */
 	appl_args->accuracy = 1; /* get and print pps stats second */
-	appl_args->error_check = 0; /* don't check packet errors by default */
+	appl_args->error_mode = ERROR_MODE_CHECK_DISABLE; /* don't check packet errors by default */
+	appl_args->checksum_offload = CHECKSUM_OFFLOAD_MODE_DISABLE; /* don't apply checksum offload default */
 	appl_args->echo = 0; /* don't echo packet by default */
 
 	opterr = 0; /* do not issue errors on helper options */
@@ -776,7 +837,10 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 			}
 			break;
 		case 'e':
-			appl_args->error_check = atoi(optarg);
+			appl_args->error_mode = atoi(optarg);
+			break;
+		case 'C':
+			appl_args->checksum_offload = atoi(optarg);
 			break;
 		case 'E':
 			appl_args->echo = 1;
