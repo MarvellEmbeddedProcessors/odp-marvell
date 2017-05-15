@@ -1289,6 +1289,7 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 {
 	odp_pktio_t pktio;
 	odp_pktio_param_t pktio_param;
+	odp_pktio_config_t config;
 	odp_pktio_capability_t capa;
 	odp_pktin_queue_param_t pktin_param;
 	odp_pktout_queue_param_t pktout_param;
@@ -1311,6 +1312,21 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 		printf("Error: capability query failed %s\n", dev);
 		return -1;
 	}
+
+	odp_pktio_config_init(&config);
+	/* Checksum Validation */
+	config.pktin.bit.ipv4_chksum = 1;
+	config.pktin.bit.udp_chksum = 1;
+	config.pktin.bit.tcp_chksum = 1;
+	/* Checksum  Generation*/
+	config.pktout.bit.ipv4_chksum = 1;
+	config.pktout.bit.udp_chksum = 1;
+	config.pktout.bit.tcp_chksum = 1;
+	/* Rx dropping on errors */
+	config.pktin.bit.drop_ipv4_err = 0;
+	config.pktin.bit.drop_udp_err = 0;
+	config.pktin.bit.drop_tcp_err = 0;
+	odp_pktio_config(pktio, &config);
 
 	odp_pktin_queue_param_init(&pktin_param);
 	odp_pktout_queue_param_init(&pktout_param);

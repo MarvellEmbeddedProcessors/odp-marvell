@@ -113,6 +113,7 @@ static int create_pktio(const char *name, odp_pool_t pool,
 			struct l3fwd_pktio_s *fwd_pktio)
 {
 	odp_pktio_param_t pktio_param;
+	odp_pktio_config_t config;
 	odp_pktio_t pktio;
 	odp_pktio_capability_t capa;
 	int rc;
@@ -142,6 +143,21 @@ static int create_pktio(const char *name, odp_pool_t pool,
 
 	if (fwd_pktio->nb_txq > MAX_NB_QUEUE)
 		fwd_pktio->nb_txq = MAX_NB_QUEUE;
+
+	odp_pktio_config_init(&config);
+	/* Checksum Validation */
+	config.pktin.bit.ipv4_chksum = 1;
+	config.pktin.bit.udp_chksum = 1;
+	config.pktin.bit.tcp_chksum = 1;
+	/* Checksum  Generation*/
+	config.pktout.bit.ipv4_chksum = 0;
+	config.pktout.bit.udp_chksum = 0;
+	config.pktout.bit.tcp_chksum = 0;
+	/* Rx dropping on errors */
+	config.pktin.bit.drop_ipv4_err = 0;
+	config.pktin.bit.drop_udp_err = 0;
+	config.pktin.bit.drop_tcp_err = 0;
+	odp_pktio_config(pktio, &config);
 
 	return 0;
 }
