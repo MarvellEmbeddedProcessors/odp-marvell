@@ -23,7 +23,7 @@ extern "C" {
 typedef struct fwd_db_entry_s {
 	struct fwd_db_entry_s *next;          /**< Next entry on list */
 	char                   oif[OIF_LEN];  /**< Output interface name */
-	odp_pktout_queue_t     pktout;        /**< Output transmit queue */
+	int       if_index;                   /**< Output interface index */
 	uint8_t   src_mac[ODPH_ETHADDR_LEN];  /**< Output source MAC */
 	uint8_t   dst_mac[ODPH_ETHADDR_LEN];  /**< Output destination MAC */
 	ip_addr_range_t        subnet;        /**< Subnet for this router */
@@ -66,7 +66,7 @@ int create_fwd_db_entry(char *input, char **if_names, int if_count);
  * @param outq   Output queue for packet transmit
  * @param mac    MAC address of this interface
  */
-void resolve_fwd_db(char *intf, odp_pktout_queue_t pktout, uint8_t *mac);
+void resolve_fwd_db(char *intf, int if_tx_index, uint8_t *mac);
 
 /**
  * Display one fowarding database entry

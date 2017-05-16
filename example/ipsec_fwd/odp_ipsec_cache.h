@@ -37,6 +37,7 @@ typedef struct ipsec_cache_entry_s {
 	sa_mode_t		     mode;        /**< SA mode - transport/tun */
 	uint32_t                     tun_src_ip;  /**< Tunnel src IPv4 addr */
 	uint32_t                     tun_dst_ip;  /**< Tunnel dst IPv4 addr */
+	int                          worker_id;   /**<Worker ID */
 	struct {
 		odp_cipher_alg_t     alg;         /**< Cipher algorithm */
 		uint32_t             spi;         /**< Cipher SPI */
@@ -99,7 +100,8 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 			     crypto_api_mode_e api_mode,
 			     odp_bool_t in,
 			     odp_queue_t completionq,
-			     odp_pool_t out_pool);
+			     odp_pool_t out_pool,
+			     int worker_id);
 
 /**
  * Find a matching IPsec cache entry for input packet
