@@ -19,6 +19,7 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <signal.h>
 
 #include <example_debug.h>
 
@@ -58,6 +59,18 @@
 #define LOG_ABORT(fmt, ...) printf("LOG_ABORT %s %d\n", __func__, __LINE__);
 #else
 #define dprintf(fmt...)
+#endif
+
+/*#define IPSEC_DEBUG_SIG*/
+#ifdef IPSEC_DEBUG_SIG
+#define DBG_ODP_APP    0x1
+#define DBG_ODP_CRYPTO 0x2
+
+#define is_dbg_app_mode()    (debug_flag & DBG_ODP_APP)
+#define is_dbg_crypto_mode() (debug_flag & DBG_ODP_CRYPTO)
+
+static unsigned int debug_flag = 0;
+static void sig_usr(int sig);
 #endif
 
 /**
@@ -1805,6 +1818,12 @@ main(int argc, char *argv[])
 	/* create by default scheduled queues */    ///// ONLY IPSEC START
 	queue_create = odp_queue_create;
 	schedule = odp_schedule_cb;
+#ifdef IPSEC_DEBUG_SIG
+	if(signal(SIGUSR1, sig_usr) != 0)
+		printf("error while register to SIGUSR1\n");
+	if(signal(SIGUSR2, sig_usr) != 0)
+		printf("error while register to SIGUSR2\n");
+#endif
 
 	/* check for using poll queues */
 	if (getenv("ODP_IPSEC_USE_POLL_QUEUES")) {
@@ -1945,3 +1964,23 @@ main(int argc, char *argv[])
 
 	return 0;
 }
+#ifdef IPSEC_DEBUG_SIG
+static void sig_usr(int sig)
+{
+	unsigned int tmp;
+	tmp = debug_flag;
+
+	switch(sig) {
+	case SIGUSR1:
+		tmp &= ~DBG_ODP_APP;
+		debug_flag ^= DBG_ODP_APP;
+		break;
+	case SIGUSR2:
+		tmp &= ~DBG_ODP_CRYPTO;
+		debug_flag ^= DBG_ODP_CRYPTO;
+		break;
+	}
+
+	debug_flag |= tmp;
+}
+#endif
