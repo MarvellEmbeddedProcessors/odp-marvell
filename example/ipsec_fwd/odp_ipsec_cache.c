@@ -42,7 +42,8 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 			     crypto_api_mode_e api_mode,
 			     odp_bool_t in,
 			     odp_queue_t completionq,
-			     odp_pool_t out_pool)
+			     odp_pool_t out_pool,
+			     int worker_id)
 {
 	odp_crypto_session_params_t params;
 	ipsec_cache_entry_t *entry;
@@ -59,6 +60,9 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 	if (cipher_sa && auth_sa &&
 	    (cipher_sa->mode != auth_sa->mode))
 		return -1;
+
+	/* keep worker ID */
+	entry->worker_id = worker_id;
 
 	/* Setup parameters and call crypto library to create session */
 	params.op = (in) ? ODP_CRYPTO_OP_DECODE : ODP_CRYPTO_OP_ENCODE;
@@ -184,6 +188,7 @@ ipsec_cache_entry_t *find_ipsec_cache_entry_in(uint32_t src_ip,
 					       odph_ahhdr_t *ah,
 					       odph_esphdr_t *esp)
 {
+	int worker_id = WORKER_ID_GET();
 	ipsec_cache_entry_t *entry = ipsec_cache->in_list;
 
 	/* Look for a hit */
@@ -200,6 +205,8 @@ ipsec_cache_entry_t *find_ipsec_cache_entry_in(uint32_t src_ip,
 		    ((!entry->esp.alg) ||
 		     (entry->esp.spi != odp_be_to_cpu_32(esp->spi))))
 			continue;
+		if (worker_id != entry->worker_id)
+			continue;
 		break;
 	}
 
@@ -210,11 +217,12 @@ ipsec_cache_entry_t *find_ipsec_cache_entry_out(uint32_t src_ip,
 						uint32_t dst_ip,
 						uint8_t proto EXAMPLE_UNUSED)
 {
+	int worker_id = WORKER_ID_GET();
 	ipsec_cache_entry_t *entry = ipsec_cache->out_list;
 
 	/* Look for a hit */
 	for (; NULL != entry; entry = entry->next) {
-		if ((entry->src_ip == src_ip) && (entry->dst_ip == dst_ip))
+		if ((entry->src_ip == src_ip) && (entry->dst_ip == dst_ip) && (entry->worker_id == worker_id))
 			break;
 	}
 	return entry;

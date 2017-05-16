@@ -48,6 +48,8 @@ extern "C" {
 #define NO_PATH(file_name) (strrchr((file_name), '/') ?                 \
 			    strrchr((file_name), '/') + 1 : (file_name))
 
+#define WORKER_ID_GET() (odp_thread_id() - 1)
+
 /**
  * IPsec key
  */
