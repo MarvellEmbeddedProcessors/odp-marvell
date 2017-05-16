@@ -356,17 +356,18 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 	if(odp_unlikely(crp_thr == NULL))
 		return -1;
 
-	if (crp_thr->app_enqs_cnt >= APP_Q_THRSHLD_HI) {
-		ODP_DBG("App Q is full (%d)!\n", crp_thr->app_enqs_cnt);
-		*posted = 0;
-		result->ok = 0;
-		return 0;
-	}
 
 	/* TODO: temporary W/A for immediate flushing of the SAM IO Qs
 	 * until we support it correctly by timeouts */
 	if (!params)
 		flush_io_qs = 1;
+
+	if (crp_thr->app_enqs_cnt >= APP_Q_THRSHLD_HI && !flush_io_qs) {
+		ODP_DBG("App Q is full (%d)!\n", crp_thr->app_enqs_cnt);
+		*posted = 0;
+		result->ok = 0;
+		return 0;
+	}
 
 	for(i = 0 ; i < get_sam_cnt() ; i++) {
 		cio = &crp_thr->cio[i];
