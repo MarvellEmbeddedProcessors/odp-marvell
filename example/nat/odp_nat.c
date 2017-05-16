@@ -2059,7 +2059,6 @@ int main(int argc, char *argv[])
 	int i;
 	int cpu;
 	int num_workers;
-	odp_shm_t shm;
 	odp_cpumask_t cpumask;
 	char cpumaskstr[ODP_CPUMASK_STR_SIZE];
 	odp_pool_param_t params;
@@ -2081,10 +2080,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Reserve memory for args from shared mem */
-	shm = odp_shm_reserve("shm_args", sizeof(args_t),
-			      ODP_CACHE_LINE_SIZE, 0);
-
-	gbl_args = odp_shm_addr(shm);
+	gbl_args = malloc(sizeof(args_t));
 
 	if (gbl_args == NULL) {
 		printf("Error: shared mem alloc failed.\n");
