@@ -41,18 +41,23 @@ extern "C" {
 #define MVSAM_MAX_NUM_SESSIONS	32
 #define MVSAM_MULTI_SAM_ASYMMETRIC_MODE
 
-#define MUSDK_TOTAL_SHM_SIZE		(128 * 1024 * 1024)
+/*
+ * Total size of shared (CMA) memory for ODP use
+ */
+#define MUSDK_TOTAL_SHM_SIZE		(200 * 1024 * 1024)
 /* MUSDK - end */
 
 /*
  * Maximum number of pools
+ * Increase from 4 to 20 for OFP support
  */
-#define ODP_CONFIG_POOLS 4
+#define ODP_CONFIG_POOLS 20
 
 /*
  * Maximum number of queues
+ * Decrease from 1024 to 256 to reduce memory usage for OFP support
  */
-#define ODP_CONFIG_QUEUES 1024
+#define ODP_CONFIG_QUEUES 256
 
 /*
  * Maximum number of packet IO resources

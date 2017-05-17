@@ -325,7 +325,7 @@ static int fill_bpool(odp_pool_t	 pool,
 	pkt = malloc(num * sizeof(odp_packet_t));
 
 	if ((final_num = packet_alloc_multi(pool, alloc_len, pkt, num)) != num)
-		err = -1;
+		ODP_ERR("Allocated %d packets instead of %d!\n", final_num, num);
 	i = 0;
 	while ((i < final_num) && (pkt[i] == ODP_PACKET_INVALID)) {
 		ODP_ERR("Allocated invalid pkt, pkt_num %d out of %d; skipping!\n", i, final_num);
