@@ -72,7 +72,9 @@ struct thd_info {
 	struct pp2_hif		*hif;
 };
 
-static uint32_t		 used_bpools = MVPP2_BPOOL_RSRV;
+static uint32_t	used_bpools = MVPP2_BPOOL_RSRV;
+static u16 	used_hifs = MVPP2_HIF_RSRV;
+
 
 /* Global lock used for control containers and other accesses */
 static odp_ticketlock_t thrs_lock;
@@ -94,6 +96,58 @@ static inline int thread_rsv_id(void)
 	pp2_thr_id = odp_thread_id();
 	return 0;
 }
+
+static int find_free_hif(void)
+{
+	int i;
+
+	for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++) {
+		if (!((1 << i) & used_hifs)) {
+			used_hifs |= (1 << i);
+			break;
+		}
+	}
+
+	if (i == MVPP2_TOTAL_NUM_HIFS) {
+		ODP_ERR("no free HIF found!\n");
+		return -1;
+	}
+
+	return i;
+}
+
+static inline struct pp2_hif* get_hif(int thread_id)
+{
+	struct pp2_hif_params		hif_params;
+	char				name[15];
+	int				hif_id, err;
+
+	if (likely(thds[thread_id].hif))
+		return thds[thread_id].hif;
+
+	odp_ticketlock_lock(&thrs_lock);
+	hif_id = find_free_hif();
+	if (hif_id < 0) {
+		ODP_ERR("No available HIFs for this thread (used_hifs: 0x%X)!!!\n", used_hifs);
+		return NULL;
+	}
+	memset(name, 0, sizeof(name));
+	snprintf(name, sizeof(name), "hif-%d", hif_id);
+	memset(&hif_params, 0, sizeof(hif_params));
+	hif_params.match = name;
+	hif_params.out_size = MVPP2_TXQ_SIZE;
+
+	err = pp2_hif_init(&hif_params, &thds[thread_id].hif);
+	if (err != 0 || !thds[thread_id].hif) {
+		ODP_ERR("HIF init failed!\n");
+		return NULL;
+	}
+	odp_ticketlock_unlock(&thrs_lock);
+
+	return thds[thread_id].hif;
+
+}
+
 
 static int find_port_info(port_desc_t *port_desc)
 {
@@ -193,8 +247,13 @@ static int mvpp2_free_buf(odp_buffer_t buf)
 	odp_packet_t pkt = _odp_packet_from_buffer(buf);
 	struct pp2_buff_inf buff_inf;
 	odp_packet_hdr_t *pkt_hdr;
-	struct pp2_hif	*hif = thds[get_thr_id()].hif;
+	struct pp2_hif	*hif = get_hif(get_thr_id());
 	int err;
+
+	if (unlikely(!hif)) {
+		ODP_ERR("mvpp2_free_buf: invalid hif object for thread-%d!\n", get_thr_id());
+		return -1;
+	}
 
 	pkt_hdr = odp_packet_hdr(pkt);
 
@@ -357,35 +416,13 @@ static int mvpp2_term_global(void)
 
 static int mvpp2_init_local(void)
 {
-	struct pp2_hif_params		hif_params;
-	char				name[15];
-	int				offs, id, err;
+	int id;
 
 	/* Egress worker thread. Provide an unique ID for resource use */
 	thread_rsv_id();
 
 	id = get_thr_id();
-
-	for (offs = 0; offs < MVPP2_TOTAL_NUM_HIFS; offs++)
-		if (!((1 << offs) & MVPP2_HIF_RSRV))
-			break;
-	if (offs == MVPP2_TOTAL_NUM_HIFS) {
-		ODP_ERR("No available HIFs for this thread!!!\n");
-		return -1;
-	}
-
-	memset(name, 0, sizeof(name));
-	snprintf(name, sizeof(name), "hif-%d", id + offs);
-	memset(&hif_params, 0, sizeof(hif_params));
-	hif_params.match = name;
-	hif_params.out_size = MVPP2_TXQ_SIZE;
-	err = pp2_hif_init(&hif_params, &thds[id].hif);
-	if (err != 0)
-		return err;
-	if (!thds[id].hif) {
-		ODP_ERR("HIF init failed!\n");
-		return -EIO;
-	}
+	thds[id].hif = NULL;
 
 	return 0;
 }
@@ -444,6 +481,7 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	port_desc_t			port_desc;
 	char				name[15];
 	int				err, pool_id;
+	struct pp2_hif			*hif;
 
 	if (strlen(devname) > sizeof(name) - 1) {
 		ODP_ERR("Port name (%s) too long!\n", devname);
@@ -459,6 +497,12 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	err = find_port_info(&port_desc);
 	if (err != 0) {
 		ODP_ERR("Port info not found!\n");
+		return -1;
+	}
+
+	hif = get_hif(get_thr_id());
+	if (!hif) {
+		ODP_ERR("failed to allocate hif!\n");
 		return -1;
 	}
 
@@ -497,7 +541,7 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	pool_entry_t *poole = get_pool_entry(pool_handle_to_index(pool));
 	/* Allocate maximum sized packets */
 	/* Allocate half of the SW pool into the HW pool; i.e. allow only 2 ports sharing the same SW pool */
-	err = fill_bpool(pktio_entry->s.pkt_mvpp2.pool, pktio_entry->s.pkt_mvpp2.bpool, thds[get_thr_id()].hif,
+	err = fill_bpool(pktio_entry->s.pkt_mvpp2.pool, pktio_entry->s.pkt_mvpp2.bpool, hif,
 			 poole->s.buf_num / 2, pktio_entry->s.pkt_mvpp2.mtu);
 	if (err != 0) {
 		ODP_ERR("can't fill port pool with buffs!\n");
@@ -990,7 +1034,12 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	tc = 0;
 	NOTUSED(txq_id);
 
-	hif = thds[get_thr_id()].hif;
+	hif = get_hif(get_thr_id());
+
+	if (odp_unlikely(!hif)) {
+		ODP_ERR("Invalid hif object for thread %d!!!\n", get_thr_id());
+		return 0;
+	}
 #ifndef USE_HW_BUFF_RECYLCE
 	shadow_q = &pkt_mvpp2->shadow_qs[get_thr_id()][tc];
 	if (!shadow_q->lockless)
