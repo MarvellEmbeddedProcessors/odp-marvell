@@ -833,17 +833,11 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 								ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
 								udphdr->src_port = ntohs(tbl[hash_index][j].target_port);
 								udphdr->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-								odph_udp_chksum_set(pkt);
-#endif
 								break;
 							case ODPH_IPPROTO_TCP:
 								ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
 								tcphdr->src_port = ntohs(tbl[hash_index][j].target_port);
 								tcphdr->cksm = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-								odph_tcp_chksum_set(pkt);
-#endif
 								break;
 							case ODPH_IPPROTO_ICMP:
 								ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
@@ -855,9 +849,6 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 								break;
 						}
 						ipv4hdr->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-						odph_ipv4_csum_update(pkt);
-#endif
 					} else {
 						odp_rwlock_write_unlock(&gbl_args->snat_lock);
 					}
@@ -917,17 +908,11 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 							ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
 							udphdr->src_port = ntohs(tbl[hash_index][j].target_port);
 							udphdr->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-							odph_udp_chksum_set(pkt);
-#endif
 							break;
 						case ODPH_IPPROTO_TCP:
 							ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
 							tcphdr->src_port = ntohs(tbl[hash_index][j].target_port);
 							tcphdr->cksm = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-							odph_tcp_chksum_set(pkt);
-#endif
 							break;
 						case ODPH_IPPROTO_ICMP:
 							ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
@@ -939,9 +924,6 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 							break;
 					}
 					ipv4hdr->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-					odph_ipv4_csum_update(pkt);
-#endif
 				}
 				break;
 			}
@@ -1027,17 +1009,11 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				ipv4hdr->dst_addr = htonl(target_ip);
 				udphdr->dst_port = htons(target_port);
 				udphdr->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-				odph_udp_chksum_set(pkt);
-#endif
 				break;
 			case ODPH_IPPROTO_TCP:
 				ipv4hdr->dst_addr = htonl(target_ip);
 				tcphdr->dst_port = htons(target_port);
 				tcphdr->cksm = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-				odph_tcp_chksum_set(pkt);
-#endif
 				break;
 			case ODPH_IPPROTO_ICMP:
 				ipv4hdr->dst_addr = htonl(target_ip);
@@ -1049,9 +1025,6 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				break;
 		}
 		ipv4hdr->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-		odph_ipv4_csum_update(pkt);
-#endif
 	}
 	return 0;
 }
