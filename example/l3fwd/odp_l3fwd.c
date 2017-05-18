@@ -1043,7 +1043,7 @@ int main(int argc, char **argv)
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = POOL_SEG_LEN;
 	params.pkt.len     = POOL_SEG_LEN;
-	params.pkt.num     = POOL_NUM_PKT * args->worker_count;
+	params.pkt.num     = (args->worker_count > 2) ? (POOL_NUM_PKT * 2) : (POOL_NUM_PKT);
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
