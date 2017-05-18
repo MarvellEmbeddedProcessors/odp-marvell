@@ -41,7 +41,7 @@ extern "C" {
 #define MVSAM_MAX_NUM_SESSIONS	32
 #define MVSAM_MULTI_SAM_ASYMMETRIC_MODE
 
-#define MUSDK_TOTAL_SHM_SIZE		(48 * 1024 * 1024)
+#define MUSDK_TOTAL_SHM_SIZE		(128 * 1024 * 1024)
 /* MUSDK - end */
 
 /*
