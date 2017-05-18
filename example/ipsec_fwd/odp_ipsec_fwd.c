@@ -71,6 +71,9 @@
 
 static unsigned int debug_flag = 0;
 static void sig_usr(int sig);
+#else
+#define is_dbg_app_mode()    0
+#define is_dbg_crypto_mode() 0
 #endif
 
 /**
@@ -616,6 +619,23 @@ void initialize_intf(char *intf, int if_index)
 		exit(EXIT_FAILURE);
 	}
 
+	odp_pktio_config_t config;
+
+	odp_pktio_config_init(&config);
+	/* Checksum Validation */
+	config.pktin.bit.ipv4_chksum = 1;
+	config.pktin.bit.udp_chksum = 1;
+	config.pktin.bit.tcp_chksum = 1;
+	/* Checksum  Generation*/
+	config.pktout.bit.ipv4_chksum = 1;
+	config.pktout.bit.udp_chksum = 1;
+	config.pktout.bit.tcp_chksum = 1;
+	/* Rx dropping on errors */
+	config.pktin.bit.drop_ipv4_err = 0;
+	config.pktin.bit.drop_udp_err = 0;
+	config.pktin.bit.drop_tcp_err = 0;
+	odp_pktio_config(pktio, &config);
+
 	odp_pktin_queue_param_init(&pktin_param);
 	odp_pktout_queue_param_init(&pktout_param);
 
@@ -624,8 +644,9 @@ void initialize_intf(char *intf, int if_index)
 	pktin_param.op_mode = ODP_PKTIO_OP_MT_UNSAFE;
 	pktin_param.hash_enable = 1;
 	pktin_param.hash_proto.proto.ipv4 = 1;
-	pktin_param.hash_proto.proto.ipv4_tcp = 1;
-	pktin_param.hash_proto.proto.ipv4_udp = 1;
+	pktin_param.hash_proto.proto.ipv4_tcp = 0; /*Must be = 1; 0 is temporary  for performance tests only */
+	pktin_param.hash_proto.proto.ipv4_udp = 0; /*Must be = 1; 0 is temporary  for performance tests only */
+
 	pktin_param.num_queues = ipsec_workers_number;
 
 	pktout_param.op_mode    = ODP_PKTIO_OP_MT_UNSAFE;
@@ -933,9 +954,6 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 	ip->tos = ctx->ipsec.ip_tos;
 	ip->frag_offset = odp_cpu_to_be_16(ctx->ipsec.ip_frag_offset);
 	ip->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-	odph_ipv4_csum_update(pkt);
-#endif /* !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || ... */
 
 	/* Correct the packet length and move payload into position */
 #ifdef MEMMOVE_OPTIMIZED
@@ -1235,9 +1253,6 @@ pkt_disposition_e do_ipsec_out_finish(odp_packet_t pkt,
 	ip->tos = ctx->ipsec.ip_tos;
 	ip->frag_offset = odp_cpu_to_be_16(ctx->ipsec.ip_frag_offset);
 	ip->chksum = 0;
-#if !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || (ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT == 0)
-	odph_ipv4_csum_update(pkt);
-#endif /* !defined(ODP_CONFIG_PKTIO_CSUM_OFF_SUPPORT) || ... */
 
 	/* Fall through to next state */
 	return PKT_CONTINUE;
@@ -1268,6 +1283,12 @@ int crypto_rx_handler_inbound(int worker_id)
 	dprintf("ODP Main Loop 6.2 AFTER CRYPTO INBOUND queue %lu64 pkts %d worker_id %d\n",
 		odp_queue_to_u64(completionq[CRYPTO_QUEUE_INBOUND_INDEX][worker_id]),
 		after_crypto_pkts, worker_id);
+
+	if (is_dbg_app_mode()) {
+		printf("CRP INBOUND: queue %lu64 pkts %d worker %d\n",
+			odp_queue_to_u64(completionq[CRYPTO_QUEUE_OUTBOUND_INDEX][worker_id]),
+			after_crypto_pkts, worker_id);
+	}
 
 	for (pkt_index = 0; pkt_index < after_crypto_pkts; pkt_index++) {
 		odp_crypto_compl_t compl;
@@ -1354,8 +1375,14 @@ int crypto_rx_handler_outbound(int worker_id)
 	}
 
 	dprintf("ODP Main Loop 6.1 AFTER CRYPTO OUTBOUND queue %lu64 pkts %d worker_id %d\n",
-		odp_queue_to_u64(completionq[CRYPTO_QUEUE_OUTBOUND_INDEX][worker_id]),
-		after_crypto_pkts, worker_id);
+			odp_queue_to_u64(completionq[CRYPTO_QUEUE_OUTBOUND_INDEX][worker_id]),
+			after_crypto_pkts, worker_id);
+
+	if (is_dbg_app_mode()) {
+		printf("CRP OUTBOUND: q %lu64 pkts %d worker %d\n",
+			odp_queue_to_u64(completionq[CRYPTO_QUEUE_OUTBOUND_INDEX][worker_id]),
+			after_crypto_pkts, worker_id);
+	}
 
 	for (pkt_index = 0; pkt_index < after_crypto_pkts; pkt_index++) {
 		odp_crypto_compl_t compl;
@@ -1416,7 +1443,7 @@ int crypto_rx_handler(int worker_id)
 {
 	int sent_encrypted = 0;
 	int sent_decrypted = 0;
-	
+
 	/* FROM CRYPTO */
 	sent_decrypted = crypto_rx_handler_inbound(worker_id);
 	sent_encrypted = crypto_rx_handler_outbound(worker_id);
@@ -1441,6 +1468,10 @@ void network_rx_handler(odp_packet_t *pkt_tbl, int pkts)
 	odp_bool_t skip = FALSE;
 
 	dprintf("ODP Main Loop 0: odp_pktin_recv  pkts=%d worker=%d\n", pkts, WORKER_ID_GET());
+
+	if (is_dbg_app_mode()) {
+		printf("PKTIO: pkts=%d worker=%d\n", pkts, WORKER_ID_GET());
+	}
 
 	for (pkt_index = 0; pkt_index < pkts; pkt_index++) {
 #ifdef USE_APP_PREFETCH
