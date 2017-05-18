@@ -686,13 +686,6 @@ static int mvpp2_output_queues_config(pktio_entry_t *pktio_entry,
 		return -1;
 	}
 
-	if (max_num_hwrx_qs % pktio_entry->s.num_out_queue) {
-		ODP_ERR("Invalid Out-Queue mapping (%d vs %d)!\n",
-			pktio_entry->s.num_in_queue,
-			max_num_hwrx_qs);
-		return -1;
-	}
-
 	for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++) {
 		for (j = 0; j < MAX_NUM_OUTQS_PER_CORE; j++) {
 			if (pktio_entry->s.param.out_mode == ODP_PKTOUT_MODE_TM)
