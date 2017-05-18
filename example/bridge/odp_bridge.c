@@ -38,7 +38,8 @@
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
  */
-#define SHM_PKT_POOL_SIZE      1024
+#define SHM_PKT_POOL_SIZE      		512
+#define SHM_PKT_POOL_SIZE_SINGLE_CORE	1024
 
 /** @def SHM_PKT_POOL_BUF_SIZE
  * @brief Buffer size of the packet pool buffer
@@ -271,6 +272,7 @@ static int run_worker(void *arg)
 				pktio = 0;
 		}
 
+		odp_pktout_send(pktout, pkt_tbl, 0);
 		pkts = odp_pktin_recv(pktin, pkt_tbl, MAX_PKT_BURST);
 		if (odp_unlikely(pkts <= 0))
 			continue;
@@ -968,7 +970,8 @@ int main(int argc, char *argv[])
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
-	params.pkt.num     = SHM_PKT_POOL_SIZE * num_workers;
+	params.pkt.num     = (num_workers >= 2) ? (SHM_PKT_POOL_SIZE * num_workers) :
+			     SHM_PKT_POOL_SIZE_SINGLE_CORE;
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
