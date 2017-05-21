@@ -174,16 +174,15 @@ static int mvpp2_rss_type_get(int hash_enable, odp_pktin_hash_proto_t hash_proto
 	/* TODO: once MUSDK API allows to configure hash per proto, need to change this
 	 * function accordingly */
 	if (hash_enable) {
-		/* TODO: Currently MUSDK only allows 5 tuple for UDP traffic */
-		if (hash_proto.proto.ipv4_udp ||
-		    hash_proto.proto.ipv6_udp)
-			return PP2_PPIO_HASH_T_5_TUPLE;
-
-		if (hash_proto.proto.ipv4_tcp ||
-		    hash_proto.proto.ipv6_tcp||
-		    hash_proto.proto.ipv4 ||
+		if (hash_proto.proto.ipv4 ||
 		    hash_proto.proto.ipv6)
 			return PP2_PPIO_HASH_T_2_TUPLE;
+
+		if (hash_proto.proto.ipv4_udp ||
+		    hash_proto.proto.ipv6_udp ||
+		    hash_proto.proto.ipv4_tcp ||
+		    hash_proto.proto.ipv6_tcp)
+			return PP2_PPIO_HASH_T_5_TUPLE;
 	}
 
 	return PP2_PPIO_HASH_T_NONE;
