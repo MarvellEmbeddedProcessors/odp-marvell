@@ -1287,18 +1287,20 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	}
 
 	odp_pktio_config_init(&config);
+
 	/* Checksum Validation */
-	config.pktin.bit.ipv4_chksum = 1;
-	config.pktin.bit.udp_chksum = 1;
-	config.pktin.bit.tcp_chksum = 1;
+	config.pktin.bit.ipv4_chksum = capa.config.pktin.bit.ipv4_chksum & 0x1;
+	config.pktin.bit.udp_chksum = capa.config.pktin.bit.udp_chksum & 0x1;
+	config.pktin.bit.tcp_chksum = capa.config.pktin.bit.tcp_chksum & 0x1;
 	/* Checksum  Generation*/
-	config.pktout.bit.ipv4_chksum = 1;
-	config.pktout.bit.udp_chksum = 1;
-	config.pktout.bit.tcp_chksum = 1;
+	config.pktout.bit.ipv4_chksum = capa.config.pktout.bit.ipv4_chksum & 0x1;
+	config.pktout.bit.udp_chksum = capa.config.pktout.bit.udp_chksum & 0x1;
+	config.pktout.bit.tcp_chksum = capa.config.pktout.bit.tcp_chksum & 0x1;
 	/* Rx dropping on errors */
 	config.pktin.bit.drop_ipv4_err = 0;
 	config.pktin.bit.drop_udp_err = 0;
 	config.pktin.bit.drop_tcp_err = 0;
+
 	odp_pktio_config(pktio, &config);
 
 	odp_pktin_queue_param_init(&pktin_param);
@@ -1988,7 +1990,7 @@ static void gbl_args_init(args_t *args)
 int main(int argc, char *argv[])
 {
 	odph_odpthread_t thread_tbl[MAX_WORKERS];
-	odp_pool_t pool;
+	odp_pool_t pool, pool_tap;
 	int i;
 	int cpu;
 	int num_workers;
@@ -2070,6 +2072,13 @@ int main(int argc, char *argv[])
 	}
 	odp_pool_print(pool);
 
+	pool_tap = odp_pool_create("packet tap pool", &params);
+	if (pool_tap == ODP_POOL_INVALID) {
+		printf("Error: packet pool create failed.\n");
+		exit(EXIT_FAILURE);
+	}
+	odp_pool_print(pool_tap);
+
 	bind_workers();
 
 	for (i = 0; i < if_count; ++i) {
@@ -2079,7 +2088,8 @@ int main(int argc, char *argv[])
 		num_rx = gbl_args->pktios[i].num_rx_thr;
 		num_tx = gbl_args->pktios[i].num_tx_thr;
 
-		if (create_pktio(dev, i, num_rx, num_tx, pool))
+		if (create_pktio(dev, i, num_rx, num_tx,
+			(i >= gbl_args->appl.if_phy_count) ? pool_tap : pool))
 			exit(EXIT_FAILURE);
 	}
 
