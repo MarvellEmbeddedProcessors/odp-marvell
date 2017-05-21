@@ -34,7 +34,7 @@
 
 /*#define USE_HW_BUFF_RECYLCE*/
 #define MAX_NUM_PACKPROCS		1
-#define BUFFER_RELEASE_BURST_SIZE	128
+#define BUFFER_RELEASE_BURST_SIZE	64
 #define PP2_SYSFS_RSS_PATH		"/sys/devices/platform/pp2/rss"
 #define PP2_SYSFS_RSS_NUM_TABLES_FILE	"num_rss_tables"
 #define PP2_MAX_BUF_STR_LEN		256
