@@ -236,7 +236,6 @@ static int fill_bpool(odp_pool_t	 pool,
 	u16 final_num, num_bufs;
 #endif
 
-
 #ifndef USE_LPBK_SW_RECYLCE
 	for (i = 0; i < num; i++) {
 		pkt = odp_packet_alloc(pool, alloc_len);
@@ -773,7 +772,7 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 	odp_packet_t pkt;
 	u16 i, num_conf = 0;
 #ifdef USE_LPBK_SW_RECYLCE
-	u16 num_bufs = 0;
+	u16 num_bufs = 0, skip_bufs = 0;;
 #endif
 
 	pp2_ppio_get_num_outq_done(ppio, hif, tc, &num_conf);
@@ -816,12 +815,14 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 		if (unlikely(!entry->buff.addr)) {
 			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
 				shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
+			skip_bufs = 1;
 			goto skip_buf;
 		}
 
 		if (unlikely(!entry->bpool)) {
 			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
 			odp_packet_free_multi(&pkt, 1);
+			skip_bufs = 1;
 			goto skip_buf;
 		}
 
@@ -830,12 +831,12 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 			goto skip_buf;
 		continue;
 skip_buf:
-		if (num_bufs) {
+		if (num_bufs)
 			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
-			shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
-			shadow_q->size -= num_bufs;
-			num_bufs = 0;
-		}
+		num_bufs += skip_bufs;
+		shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
+		shadow_q->size -= num_bufs;
+		num_bufs = 0;
 	}
 	if (num_bufs) {
 		pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
