@@ -792,11 +792,13 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
 				shadow_q->read_ind, (u64)entry->buff.cookie, (u64)entry->buff.addr);
 			shadow_q->read_ind++;
+			shadow_q->size--;
 			if (shadow_q->read_ind == SHADOW_Q_MAX_SIZE)
 				shadow_q->read_ind = 0;
 			continue;
 		}
 		shadow_q->read_ind++;
+		shadow_q->size--;
 		if (shadow_q->read_ind == SHADOW_Q_MAX_SIZE)
 			shadow_q->read_ind = 0;
 
