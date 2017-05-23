@@ -76,8 +76,9 @@
 
 #define VID_MASK               	0xFFF
 #define DEV_ID_MASK            	0x1F
+#define INVALID_VID		0xFFFF
 
-#define MAX_STRING  			32
+#define MAX_STRING		32
 
 #define ODP_NAT_AGING_ENABLE 	1
 
@@ -1766,6 +1767,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	appl_args->accuracy = 1; /* get and print pps stats second */
 	appl_args->error_check = 0; /* don't check packet errors by default */
 	appl_args->dsa_mode = 0;
+	appl_args->lan_vid = INVALID_VID;
 	appl_args->aging_time = 300; /*default ageout time*/
 
 	opterr = 0; /* do not issue errors on helper options */
@@ -1897,6 +1899,12 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		default:
 			break;
 		}
+	}
+
+	if ((appl_args->dsa_mode == 1) &&
+		((appl_args->if_wan_str == NULL) || (appl_args->lan_vid == INVALID_VID))) {
+		printf("DSA mode misses lan and wan vids\n");
+		exit(EXIT_FAILURE);
 	}
 
     /* allocate storage for the if names */
