@@ -24,7 +24,8 @@
 #include "odp_l3fwd_db.h"
 #include "odp_l3fwd_lpm.h"
 
-#define POOL_NUM_PKT	1024
+#define POOL_NUM_PKT_CORES_1_2	256
+#define POOL_NUM_PKT_CORES_3_4	128
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	64
 
@@ -84,6 +85,7 @@ typedef struct {
 	uint8_t hash_mode; /* 1:hash, 0:lpm */
 	uint8_t dest_mac_changed[MAX_NB_PKTIO]; /* 1: dest mac from cmdline */
 	int error_check; /* Check packets for errors */
+	int num_buffers_per_queue;
 } app_args_t;
 
 struct {
@@ -536,13 +538,15 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		{"duration", required_argument, NULL, 'd'},	/* return 'd' */
 		{"thread", required_argument, NULL, 't'},	/* return 't' */
 		{"queue", required_argument, NULL, 'q'},	/* return 'q' */
+		{"num_buffers_per_queue", required_argument, NULL, 'b'},
 		{"error_check", required_argument, NULL, 'e'},
 		{"help", no_argument, NULL, 'h'},		/* return 'h' */
 		{NULL, 0, NULL, 0}
 	};
+	args->num_buffers_per_queue = 0;
 
 	while (1) {
-		opt = getopt_long(argc, argv, "+s:t:d:i:r:q:e:h",
+		opt = getopt_long(argc, argv, "+s:t:d:i:r:q:e:b:h",
 				  longopts, &long_index);
 
 		if (opt == -1)
@@ -569,6 +573,9 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		/* parse seconds to run */
 		case 'd':
 			args->duration = atoi(optarg);
+			break;
+		case 'b':
+			args->num_buffers_per_queue = atoi(optarg);
 			break;
 
 		/* parse packet-io interface names */
@@ -1043,7 +1050,10 @@ int main(int argc, char **argv)
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = POOL_SEG_LEN;
 	params.pkt.len     = POOL_SEG_LEN;
-	params.pkt.num     = (args->worker_count > 2) ? (POOL_NUM_PKT * 2) : (POOL_NUM_PKT);
+	if (args->num_buffers_per_queue == 0)
+		args->num_buffers_per_queue =
+			(args->worker_count <= 2)?POOL_NUM_PKT_CORES_1_2:POOL_NUM_PKT_CORES_3_4;
+	params.pkt.num = args->if_count *(args->num_buffers_per_queue * args->worker_count);
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
@@ -1052,6 +1062,7 @@ int main(int argc, char **argv)
 		printf("Error: packet pool create failed.\n");
 		exit(1);
 	}
+	odp_pool_print(pool);
 
 	/* Resolve fwd db*/
 	for (i = 0; i < args->if_count; i++) {
