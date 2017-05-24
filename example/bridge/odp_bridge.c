@@ -38,8 +38,8 @@
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
  */
-#define SHM_PKT_POOL_SIZE      		512
-#define SHM_PKT_POOL_SIZE_SINGLE_CORE	1024
+#define SHM_PKT_POOL_SIZE_CORES_1_2    	256
+#define SHM_PKT_POOL_SIZE_CORES_3_4    	128
 
 /** @def SHM_PKT_POOL_BUF_SIZE
  * @brief Buffer size of the packet pool buffer
@@ -91,6 +91,7 @@ typedef struct {
 	enum error_mode error_mode; /**< Check packet errors */
 	enum checksum_offload_mode checksum_offload; /**< Checksum offload */
 	int echo;	        /**< Echo packet */
+	int num_buffers_per_queue;
 
 } appl_args_t;
 
@@ -272,10 +273,11 @@ static int run_worker(void *arg)
 				pktio = 0;
 		}
 
-		odp_pktout_send(pktout, pkt_tbl, 0);
 		pkts = odp_pktin_recv(pktin, pkt_tbl, MAX_PKT_BURST);
-		if (odp_unlikely(pkts <= 0))
+		if (odp_unlikely(pkts <= 0)) {
+			odp_pktout_send(pktout, pkt_tbl, 0);
 			continue;
+		}
 
 		if (gbl_args->appl.error_mode != ERROR_MODE_CHECK_DISABLE) {
 			int rx_drops;
@@ -743,13 +745,14 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"accuracy", required_argument, NULL, 'a'},
 		{"interface", required_argument, NULL, 'i'},
 		{"error_mode", required_argument, NULL, 'e'},
+		{"num_buffers_per_queue", required_argument, NULL, 'b'},
 		{"checksum_offload", required_argument, NULL, 'C'},
 		{"echo", no_argument, NULL, 'E'},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts =  "+c:+t:+a:i:e:C:Eh";
+	static const char *shortopts =  "+c:+t:+a:i:e:b:C:Eh";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
 	odph_parse_options(argc, argv, shortopts, longopts);
@@ -759,6 +762,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	appl_args->error_mode = ERROR_MODE_CHECK_DISABLE; /* don't check packet errors by default */
 	appl_args->checksum_offload = CHECKSUM_OFFLOAD_MODE_DISABLE; /* don't apply checksum offload default */
 	appl_args->echo = 0; /* don't echo packet by default */
+	appl_args->num_buffers_per_queue = 0;
 
 	opterr = 0; /* do not issue errors on helper options */
 	while (1) {
@@ -776,6 +780,9 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 			break;
 		case 'a':
 			appl_args->accuracy = atoi(optarg);
+			break;
+		case 'b':
+			appl_args->num_buffers_per_queue = atoi(optarg);
 			break;
 		case 'i':
 			len = strlen(optarg);
@@ -970,8 +977,10 @@ int main(int argc, char *argv[])
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
-	params.pkt.num     = (num_workers >= 2) ? (SHM_PKT_POOL_SIZE * num_workers) :
-			     SHM_PKT_POOL_SIZE_SINGLE_CORE;
+	if (gbl_args->appl.num_buffers_per_queue == 0)
+		gbl_args->appl.num_buffers_per_queue =
+			(num_workers <= 2)?SHM_PKT_POOL_SIZE_CORES_1_2:SHM_PKT_POOL_SIZE_CORES_3_4;
+	params.pkt.num     = if_count * (gbl_args->appl.num_buffers_per_queue * num_workers);
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
