@@ -38,8 +38,7 @@
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
  */
-#define SHM_PKT_POOL_SIZE_CORES_1_2    	256
-#define SHM_PKT_POOL_SIZE_CORES_3_4    	128
+#define SHM_PKT_POOL_SIZE_PER_QUEUE    	512
 
 /** @def SHM_PKT_POOL_BUF_SIZE
  * @brief Buffer size of the packet pool buffer
@@ -978,8 +977,7 @@ int main(int argc, char *argv[])
 	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
 	if (gbl_args->appl.num_buffers_per_queue == 0)
-		gbl_args->appl.num_buffers_per_queue =
-			(num_workers <= 2)?SHM_PKT_POOL_SIZE_CORES_1_2:SHM_PKT_POOL_SIZE_CORES_3_4;
+		gbl_args->appl.num_buffers_per_queue = SHM_PKT_POOL_SIZE_PER_QUEUE;
 	params.pkt.num     = if_count * (gbl_args->appl.num_buffers_per_queue * num_workers);
 	params.type        = ODP_POOL_PACKET;
 
