@@ -24,8 +24,7 @@
 #include "odp_l3fwd_db.h"
 #include "odp_l3fwd_lpm.h"
 
-#define POOL_NUM_PKT_CORES_1_2	256
-#define POOL_NUM_PKT_CORES_3_4	128
+#define SHM_PKT_POOL_SIZE_PER_QUEUE	512
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	64
 
@@ -1051,8 +1050,7 @@ int main(int argc, char **argv)
 	params.pkt.seg_len = POOL_SEG_LEN;
 	params.pkt.len     = POOL_SEG_LEN;
 	if (args->num_buffers_per_queue == 0)
-		args->num_buffers_per_queue =
-			(args->worker_count <= 2)?POOL_NUM_PKT_CORES_1_2:POOL_NUM_PKT_CORES_3_4;
+		args->num_buffers_per_queue = SHM_PKT_POOL_SIZE_PER_QUEUE;
 	params.pkt.num = args->if_count *(args->num_buffers_per_queue * args->worker_count);
 	params.type        = ODP_POOL_PACKET;
 
