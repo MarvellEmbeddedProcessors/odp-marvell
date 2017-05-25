@@ -42,7 +42,7 @@
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
  */
-#define SHM_PKT_POOL_SIZE      1024
+#define SHM_PKT_POOL_SIZE      1280
 
 /** @def SHM_PKT_POOL_BUF_SIZE
  * @brief Buffer size of the packet pool buffer
@@ -80,7 +80,7 @@
 
 #define MAX_STRING		32
 
-#define ODP_NAT_AGING_ENABLE 	1
+#define ODP_NAT_AGING_ENABLE 	0
 
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
@@ -508,16 +508,24 @@ static nat_entry_t* dnat_tbl_add_entry(ipv4_5tuple_t* ipv4_5tuple, uint32_t targ
 
 	hash_index = XXH32((void *)ipv4_5tuple, sizeof(ipv4_5tuple_t), NAT_HASH_SEED) & (NAT_TBL_SIZE - 1);
 	for (i = 0; i < NAT_TBL_DEPTH; i++) {
+#if ODP_NAT_AGING_ENABLE
 		odp_rwlock_write_lock(&gbl_args->dnat_lock);
+#endif
 		entry = &gbl_args->dnat_tbl[hash_index][i];
 		if (entry->valid) {
+#if ODP_NAT_AGING_ENABLE
 			odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+#endif
 			if (0 == memcmp(ipv4_5tuple, &entry->ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
 				entry->counter = 0;
+#if ODP_NAT_AGING_ENABLE
 				odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+#endif
 				return entry;
 			} else {
+#if ODP_NAT_AGING_ENABLE
 				odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+#endif
 			}
 		} else {
 			entry->valid = 1;
@@ -526,7 +534,9 @@ static nat_entry_t* dnat_tbl_add_entry(ipv4_5tuple_t* ipv4_5tuple, uint32_t targ
 			entry->target_port = port;
 			entry->reverse_nat_entry = snat_ptr;
 			entry->counter = 0;
+#if ODP_NAT_AGING_ENABLE
 			odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+#endif
 			return entry;
 		}
 	}
@@ -822,13 +832,17 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 		hash_index = XXH32((void*)&snat_ipv4, sizeof(ipv4_5tuple_t), NAT_HASH_SEED) & (NAT_TBL_SIZE-1);
 
 		for (j = 0; j < NAT_TBL_DEPTH; j++) {
+#if ODP_NAT_AGING_ENABLE
 		    odp_rwlock_write_lock(&gbl_args->snat_lock);
+#endif
 			if (tbl[hash_index][j].valid) {
 				if (0 == memcmp(&snat_ipv4, &tbl[hash_index][j].ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
 					tbl[hash_index][j].counter = 0;
 					tbl[hash_index][j].reverse_nat_entry->counter = 0;
 					if (tbl[hash_index][j].target_ip) {
+#if ODP_NAT_AGING_ENABLE
 						odp_rwlock_write_unlock(&gbl_args->snat_lock);
+#endif
 						switch (snat_ipv4.protocol) {
 							case ODPH_IPPROTO_UDP:
 								ipv4hdr->src_addr = ntohl(tbl[hash_index][j].target_ip);
@@ -851,11 +865,15 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 						}
 						ipv4hdr->chksum = 0;
 					} else {
+#if ODP_NAT_AGING_ENABLE
 						odp_rwlock_write_unlock(&gbl_args->snat_lock);
+#endif
 					}
 					break;
 				} else {
+#if ODP_NAT_AGING_ENABLE
 					odp_rwlock_write_unlock(&gbl_args->snat_lock);
+#endif
 				}
 			} else {
 				odph_nat_wan_pool_t* port_pool = NULL;
@@ -865,7 +883,9 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				tbl[hash_index][j].target_ip = ip_table_lookup(snat_ipv4.src_ip);
 				// No match in IP table, probably control plane packets, drop it
 				if (!tbl[hash_index][j].target_ip) {
+#if ODP_NAT_AGING_ENABLE
 					odp_rwlock_write_unlock(&gbl_args->snat_lock);
+#endif
 					return 1;
 				}
 				// 2. Add into SNAT table
@@ -887,7 +907,9 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 					default:
 						break;
 				}
+#if ODP_NAT_AGING_ENABLE
 				odp_rwlock_write_unlock(&gbl_args->snat_lock);
+#endif
 
 				if (tbl[hash_index][j].target_ip) {
 					// 3. Add into DNAT table
@@ -984,20 +1006,28 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 		hash_index = XXH32((void*)&ipv4, sizeof(ipv4_5tuple_t), NAT_HASH_SEED) & (NAT_TBL_SIZE - 1);
 
 		for (j = 0; j < NAT_TBL_DEPTH; j++) {
+#if ODP_NAT_AGING_ENABLE
 			odp_rwlock_write_lock(&gbl_args->dnat_lock);
+#endif
 			if (tbl[hash_index][j].valid) {
 				if (0 == memcmp(&ipv4, &tbl[hash_index][j].ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
 					target_ip = tbl[hash_index][j].target_ip;
 					target_port = tbl[hash_index][j].target_port;
 					tbl[hash_index][j].counter = 0;
 					tbl[hash_index][j].reverse_nat_entry->counter = 0;
+#if ODP_NAT_AGING_ENABLE
 					odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+#endif
 					break;
 				} else {
+#if ODP_NAT_AGING_ENABLE
 					odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+#endif
 				}
 			} else {
+#if ODP_NAT_AGING_ENABLE
 				odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+#endif
 				break;
 			}
 		}
