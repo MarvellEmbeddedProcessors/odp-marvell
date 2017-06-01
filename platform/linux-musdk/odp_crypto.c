@@ -515,9 +515,7 @@ static int mvsam_odp_crypto_init_global(void)
 {
 	int		err, i;
 
-#ifdef MVSAM_MULTI_SAM_ASYMMETRIC_MODE
 	sam_num_inst = sam_get_num_inst();
-#endif
 	err = mvsam_odp_crypto_init_cio(MAX_NUM_OF_THREADS, sam_num_inst);
 	ODP_DBG("crypto: allocate crp_op_request - %d\n", MVSAM_RING_SIZE);
 
