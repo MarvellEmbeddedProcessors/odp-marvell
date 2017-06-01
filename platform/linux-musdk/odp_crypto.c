@@ -120,8 +120,7 @@ static uint8_t	used_cios[MAX_NUM_OF_CIO_PER_WORKER] = {MVSAM_CIOS_RSRV};
 static unsigned int         num_session   = 0;
 static unsigned int         sam_num_inst  = 1;
 
-#define get_sam_cnt()   (sam_num_inst)
-#define is_multi_sam()  ((get_sam_cnt() > 1) ? 1 : 0)
+#define is_multi_sam()  ((sam_num_inst > 1) ? 1 : 0)
 
 
 struct crypto_cio_info {
@@ -369,7 +368,7 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 		return 0;
 	}
 
-	for(i = 0 ; i < get_sam_cnt() ; i++) {
+	for(i = 0 ; i < sam_num_inst ; i++) {
 		cio = &crp_thr->cio[i];
 
 		/* If we reach to the end of the ring, we need to "drain" it a little */
@@ -533,7 +532,7 @@ static int mvsam_odp_crypto_term_global(void)
 {
 	unsigned int i, cio_local_idx;
 	for(i = 0 ; i < MAX_NUM_OF_THREADS ; i++) {
-		for(cio_local_idx = 0 ; cio_local_idx < get_sam_cnt() ; cio_local_idx++)
+		for(cio_local_idx = 0 ; cio_local_idx < sam_num_inst ; cio_local_idx++)
 			sam_cio_deinit(crp_thread[i].cio[cio_local_idx].cio_hw);
 	}
 	sam_deinit();
