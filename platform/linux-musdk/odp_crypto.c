@@ -153,7 +153,7 @@ odp_crypto_generic_op_result_t *get_op_result_from_event(odp_event_t ev)
 }
 
 #ifdef ODP_PKTIO_MVSAM
-static struct crypto_cio_info* get_crp_thr_cio(struct crypto_thread_info *crp_thr, odp_crypto_op_t op)
+static inline struct crypto_cio_info* get_crp_thr_cio(struct crypto_thread_info *crp_thr, odp_crypto_op_t op)
 {
 	int cio_idx = 0;
 	if(is_multi_sam())
