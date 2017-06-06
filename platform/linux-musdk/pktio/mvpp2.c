@@ -636,6 +636,8 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 		return -1;
 	}
 
+	pp2_ppio_set_loopback(pktio_entry->s.pkt_mvpp2.ppio, pktio_entry->s.config.enable_loop);
+
 	pp2_ppio_enable(pktio_entry->s.pkt_mvpp2.ppio);
 
 	ODP_PRINT("PktIO PP2 has %d RxTCs and %d TxTCs\n",
