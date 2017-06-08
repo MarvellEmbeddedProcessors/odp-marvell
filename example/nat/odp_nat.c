@@ -138,6 +138,7 @@ typedef struct {
 
 	uint32_t aging_time; /* aging time for DNAT entries */
 	int dsa_mode;
+	int debug_mode;
 	int print_table;
 	uint16_t lan_vid;
 	uint16_t wan_vid[ODP_NAT_MAX_WAN_IP];
@@ -641,6 +642,17 @@ static int process_tocpu_lan(odp_packet_t pkt)
         return 1;
     }
 
+    if (gbl_args->appl.debug_mode) {
+        int j;
+        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+        printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
+
+        for (j = 0; j < 64; j++) {
+            printf("%02x ", data[j]);
+        }
+        printf("\n");
+    }
+
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
         return 2;
     else
@@ -677,6 +689,17 @@ static int process_tocpu_wan(odp_packet_t pkt)
 
     if(odp_packet_copy_from_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t), &macaddr) != 0) {
         return 1;
+    }
+
+    if (gbl_args->appl.debug_mode) {
+        int j;
+        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+        printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
+
+        for (j = 0; j < 64; j++) {
+            printf("%02x ", data[j]);
+        }
+        printf("\n");
     }
 
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
@@ -717,6 +740,17 @@ static int process_fromcpu_lan(odp_packet_t pkt)
 
     if (odp_packet_copy_from_mem(pkt, 2 * sizeof(odph_ethaddr_t), sizeof(odph_dsa_t), &dsaFill) != 0) {
         return 1;
+    }
+
+    if (gbl_args->appl.debug_mode) {
+        int j;
+        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+        printf("Sending to %s\n", gbl_args->appl.if_names[pktio.tx_idx]);
+
+        for (j = 0; j < 64; j++) {
+            printf("%02x ", data[j]);
+        }
+        printf("\n");
     }
 
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
@@ -760,6 +794,17 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
 
     if (odp_packet_copy_from_mem(pkt, 2 * sizeof(odph_ethaddr_t), sizeof(odph_dsa_t), &dsaFill) != 0) {
         return 1;
+    }
+
+    if (gbl_args->appl.debug_mode) {
+        int j;
+        uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+        printf("Sending to %s\n", gbl_args->appl.if_names[pktio.tx_idx]);
+
+        for (j = 0; j < 64; j++) {
+            printf("%02x ", data[j]);
+        }
+        printf("\n");
     }
 
     if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
@@ -837,6 +882,9 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 #endif
 			if (tbl[hash_index][j].valid) {
 				if (0 == memcmp(&snat_ipv4, &tbl[hash_index][j].ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
+					if (gbl_args->appl.debug_mode)
+						printf("Found in snat table: %08x %d %08x %d %d %08x -> %d %d\n", snat_ipv4.src_ip, snat_ipv4.src_port, snat_ipv4.dst_ip, snat_ipv4.dst_port, snat_ipv4.protocol, tbl[hash_index][j].target_ip, hash_index, j);
+
 					tbl[hash_index][j].counter = 0;
 					tbl[hash_index][j].reverse_nat_entry->counter = 0;
 					if (tbl[hash_index][j].target_ip) {
@@ -911,6 +959,10 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				odp_rwlock_write_unlock(&gbl_args->snat_lock);
 #endif
 
+				//if (j > 1)
+				if (gbl_args->appl.debug_mode)
+					printf("add to snat table: %08x %d %08x %d %d %08x -> %d %d\n", snat_ipv4.src_ip, snat_ipv4.src_port, snat_ipv4.dst_ip, snat_ipv4.dst_port, snat_ipv4.protocol, tbl[hash_index][j].target_ip, hash_index, j);
+
 				if (tbl[hash_index][j].target_ip) {
 					// 3. Add into DNAT table
 					dnat_ipv4.src_ip = snat_ipv4.dst_ip;
@@ -924,6 +976,10 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 					}
 
 					tbl[hash_index][j].reverse_nat_entry = dnat_tbl_add_entry(&dnat_ipv4, snat_ipv4.src_ip, snat_ipv4.src_port, &tbl[hash_index][j]);
+					if (gbl_args->appl.debug_mode) {
+						printf("add to dnat table: %08x %d %08x %d %d %08x -> %p\n", dnat_ipv4.src_ip, dnat_ipv4.src_port, dnat_ipv4.dst_ip, dnat_ipv4.dst_port, dnat_ipv4.protocol, snat_ipv4.src_ip, tbl[hash_index][j].reverse_nat_entry);
+						printf("Chaning src IP from %08x to %08x, src port to %d\n", ipv4hdr->src_addr, ntohl(tbl[hash_index][j].target_ip), ntohs(tbl[hash_index][j].target_port));
+					}
 
 					// 4. DO NAT
 					switch (snat_ipv4.protocol) {
@@ -1011,6 +1067,8 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 #endif
 			if (tbl[hash_index][j].valid) {
 				if (0 == memcmp(&ipv4, &tbl[hash_index][j].ipv4_5tuple, sizeof(ipv4_5tuple_t))) {
+					if (gbl_args->appl.debug_mode)
+						printf("Found in dnat table: %08x %d %08x %d %d %08x -> %d %d\n", ipv4.src_ip, ipv4.src_port, ipv4.dst_ip, ipv4.dst_port, ipv4.protocol, tbl[hash_index][j].target_ip, hash_index, j);
 					target_ip = tbl[hash_index][j].target_ip;
 					target_port = tbl[hash_index][j].target_port;
 					tbl[hash_index][j].counter = 0;
@@ -1032,8 +1090,13 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 			}
 		}
 		if (odp_unlikely((j == NAT_TBL_DEPTH) || (!tbl[hash_index][j].valid))) {
+			if (gbl_args->appl.debug_mode)
+				printf("Not found in dnat table: %08x %d %08x %d %d %d -> %d %d\n", ipv4.src_ip, ipv4.src_port, ipv4.dst_ip, ipv4.dst_port, ipv4.protocol, tbl[hash_index][j].valid, hash_index, j);
 			return 1;
 		}
+
+		if (gbl_args->appl.debug_mode)
+			printf("Changing dst address from %08x to %08x\n", ipv4hdr->dst_addr, htonl(target_ip));
 
 		switch (ipv4.protocol) {
 			case ODPH_IPPROTO_UDP:
@@ -1116,26 +1179,58 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 		if (num - i > PREFETCH_SHIFT)
 			odp_packet_prefetch(pkt_tbl[i + PREFETCH_SHIFT], ODPH_ETHHDR_LEN, ODPH_IPV4HDR_LEN + 12);
 
+		if (gbl_args->appl.debug_mode) {
+			int j;
+			uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+			printf("Rx from interface %s\n", gbl_args->appl.if_names[pktio->rx_idx]);
+
+			for (j = 0; j < 64; j++) {
+				printf("%02x ", data[j]);
+			}
+			printf("\n");
+		}
+
         switch (get_pkt_type(pkt, pktio)) {
             case DATA_PLANE_FROM_LAN:
+                if (gbl_args->appl.debug_mode) {
+                    printf("It is DATA_PLANE_FROM_LAN\n");
+                }
                 proceed = do_snat(pkt, gbl_args->snat_tbl);
                 break;
             case DATA_PLANE_FROM_WAN:
+                if (gbl_args->appl.debug_mode) {
+                    printf("It is DATA_PLANE_FROM_WAN\n");
+                }
                 proceed = do_dnat(pkt, gbl_args->dnat_tbl);
                 break;
             case CONTROL_PLANE_TO_CPU_LAN:
+                if (gbl_args->appl.debug_mode) {
+                    printf("It is CONTROL_PLANE_TO_CPU_LAN\n");
+                }
                 proceed = process_tocpu_lan(pkt);
                 break;
             case CONTROL_PLANE_TO_CPU_WAN:
+                if (gbl_args->appl.debug_mode) {
+                    printf("It is CONTROL_PLANE_TO_CPU_WAN\n");
+                }
                 proceed = process_tocpu_wan(pkt);
                 break;
             case CONTROL_PLANE_FROM_CPU_LAN:
+                if (gbl_args->appl.debug_mode) {
+                    printf("It is CONTROL_PLANE_FROM_CPU_LAN\n");
+                }
                 proceed = process_fromcpu_lan(pkt);
                 break;
             case CONTROL_PLANE_FROM_CPU_WAN:
+                if (gbl_args->appl.debug_mode) {
+                    printf("It is CONTROL_PLANE_FROM_CPU_WAN\n");
+                }
                 proceed = process_fromcpu_wan(pkt, pktio);
                 break;
             default:
+                if (gbl_args->appl.debug_mode) {
+                    printf("It is UNKNOWN TYPE\n");
+                }
                 odp_packet_free(pkt);
                 break;
         }
@@ -1143,11 +1238,26 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
         switch (proceed) {
             case 0:
                 send_pkt_tbl[sent++] = pkt;
+                if (gbl_args->appl.debug_mode) {
+                    int j;
+                    uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+                    printf("After processing:\n");
+
+                    for (j = 0; j < 64; j++) {
+                        printf("%02x ", data[j]);
+                    }
+                    printf("\n");
+                    printf("Sending to  %s\n", gbl_args->appl.if_names[pktio->tx_idx]);
+                }
                 break;
             case 1:
                 odp_packet_free(pkt);
+                if (gbl_args->appl.debug_mode)
+                printf("Dropped\n");
                 break;
             case 2:
+                if (gbl_args->appl.debug_mode)
+                printf("Sent to Control Plane\n");
             default:
                 break;
         }
@@ -1752,6 +1862,7 @@ static void usage(char *progname)
 	       "  -c, --count <number> CPU count.\n"
 	       "  -a, --accuracy <number> Time in seconds get print statistics\n"
 	       "                          (default is 1 second).\n"
+	       "  -g, --debug debug mode\n"
 	       "  -p, --print NAT table\n"
 	       "  -h, --help           Display help and exit.\n\n"
 	       "\n", NO_PATH(progname), NO_PATH(progname), NO_PATH(progname), NO_PATH(progname), MAX_PKTIOS
@@ -1783,12 +1894,13 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"lan_vid", required_argument, NULL, 'l'},
 		{"wan_vid", required_argument, NULL, 'w'},
 		{"dsa", no_argument, NULL, 's'},
+		{"debug", no_argument, NULL, 'g'},
 		{"print", no_argument, NULL, 'p'},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts =  "+c:+a:i:d:o:l:w:shp";
+	static const char *shortopts =  "+c:+a:i:d:o:l:w:shgp";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
 	odph_parse_options(argc, argv, shortopts, longopts);
@@ -1917,6 +2029,10 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
             }
             appl_args->if_wan_count = i;
             break;
+
+		case 'g':
+			appl_args->debug_mode = 1;
+			break;
 
 		case 'p':
 			appl_args->print_table = 1;
