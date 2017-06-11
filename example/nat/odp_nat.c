@@ -554,7 +554,6 @@ static void *odp_nat_packet_l3_ptr(odp_packet_t pkt, uint32_t *offset, uint16_t 
 	odph_ethhdr_t *eth;
 	odph_vlanhdr_t *vlan;
 	uint8_t *parseptr;
-	odp_packet_hdr_t *pkt_hdr = odp_packet_hdr(pkt);
 
 	if (odp_packet_has_eth(pkt)) {
 		*offset = sizeof(odph_ethhdr_t);
@@ -587,12 +586,7 @@ static void *odp_nat_packet_l3_ptr(odp_packet_t pkt, uint32_t *offset, uint16_t 
 			*ethtype = odp_be_to_cpu_16(vlan->type);
 			(*offset) += 4;
 		}
-		pkt_hdr->p.l3_offset = *offset;
-		if (odp_likely((*ethtype) == ODPH_ETHTYPE_IPV4))
-			pkt_hdr->p.input_flags.ipv4 = 1;
-		else if ((*ethtype) == ODPH_ETHTYPE_IPV6)
-			pkt_hdr->p.input_flags.ipv6 = 1;
-
+		odp_packet_l3_offset_set(pkt, *offset);
 		return odp_packet_offset(pkt, *offset, NULL, NULL);
 	}
 	return NULL;
@@ -600,21 +594,16 @@ static void *odp_nat_packet_l3_ptr(odp_packet_t pkt, uint32_t *offset, uint16_t 
 
 static void *odp_nat_packet_l4_ptr(odp_packet_t pkt, void *l3_hdr, uint32_t l3_offset, uint16_t ethtype)
 {
-	odp_packet_hdr_t *pkt_hdr = odp_packet_hdr(pkt);
+	uint32_t l4_offset;
 
 	if (ethtype == ODPH_ETHTYPE_IPV4) {
 		odph_ipv4hdr_t *ipv4hdr = (odph_ipv4hdr_t *)l3_hdr;
 		uint8_t ihl = ODPH_IPV4HDR_IHL(ipv4hdr->ver_ihl);
 		uint8_t l4_protol = ipv4hdr->proto;
 
-		pkt_hdr->p.l4_offset = pkt_hdr->p.l3_offset + (ihl << 2);
-
-		if (odp_likely(l4_protol == ODPH_IPPROTO_UDP))
-			pkt_hdr->p.input_flags.udp = 1;
-		else if (l4_protol == ODPH_IPPROTO_TCP)
-			pkt_hdr->p.input_flags.tcp = 1;
-
-		return (odph_ipv4hdr_t *)odp_packet_offset(pkt, l3_offset + ihl * 4, NULL, NULL);
+		l4_offset = l3_offset + (ihl << 2);
+		odp_packet_l4_offset_set(pkt, l4_offset);
+		return (odph_ipv4hdr_t *)odp_packet_offset(pkt, l4_offset, NULL, NULL);
 	}
 	return NULL;
 }
@@ -826,7 +815,6 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 	ipv4_5tuple_t snat_ipv4, dnat_ipv4;
 	uint32_t hash_index;
 	ip_mapping_entry_t *iptbl;
-	odp_packet_hdr_t *pkt_hdr = odp_packet_hdr(pkt);
 	odph_dsa_ethhdr_t *eth;
 	unsigned char dev_id;
 	char src_ip_str[MAX_STRING];
@@ -835,7 +823,7 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset, &ethtype);
 
 	//For IPv6, don't do anything
-	if (pkt_hdr->p.input_flags.ipv6)
+	if (odp_unlikely(ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) == ODPH_IPV6))
 		return 0;
 
 	// udphdr is L4 header, could be udp, tcp or icmp header
@@ -1031,11 +1019,9 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 	odph_dsa_ethhdr_t *eth;
 	unsigned char dev_id;
 
-	odp_packet_hdr_t *pkt_hdr = odp_packet_hdr(pkt);
-
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset, &ethtype);
 	//For IPv6, don't do anything
-	if (pkt_hdr->p.input_flags.ipv6)
+	if (odp_unlikely(ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) == ODPH_IPV6))
 		return 0;
 
 	udphdr = (odph_udphdr_t *)odp_nat_packet_l4_ptr(pkt, ipv4hdr, l3_offset, ethtype);
