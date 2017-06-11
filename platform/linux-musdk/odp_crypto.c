@@ -428,24 +428,23 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
 	}
 
 	cio->sam_op_params[requests_offs].cipher_len    = params->cipher_range.length;
-	cio->sam_op_params[requests_offs].cipher_offset =
-		odp_packet_headroom(params->pkt) + params->cipher_range.offset;
+	cio->sam_op_params[requests_offs].cipher_offset = params->cipher_range.offset;
 
 	cio->sam_op_params[requests_offs].cookie        = &cio->requests[requests_offs];
 	cio->sam_op_params[requests_offs].sa            = session->sa;
-	cio->requests[requests_offs].sam_src_buf.len    =
-		odp_packet_headroom(params->pkt) + odp_packet_len(params->pkt);
+	cio->requests[requests_offs].sam_src_buf.len    = odp_packet_len(params->pkt);
 
-	cio->requests[requests_offs].sam_src_buf.vaddr = odp_packet_head(params->pkt);
+	cio->requests[requests_offs].sam_src_buf.vaddr = odp_packet_data(params->pkt);
 	cio->requests[requests_offs].sam_src_buf.paddr =
-		mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(params->pkt)));
-	/* TODO: need to get the real buffer size from the odp_buffer structure. */
-	cio->requests[requests_offs].sam_dst_buf.len   =
-		odp_packet_headroom(params->pkt) + odp_packet_len(params->pkt) + 64;
+		mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_data(params->pkt)));
 
-	cio->requests[requests_offs].sam_dst_buf.vaddr = odp_packet_head(params->out_pkt);
+	/* TODO: need to get the real buffer size from the odp_buffer structure. */
+	cio->requests[requests_offs].sam_dst_buf.len   = odp_packet_len(params->pkt) + 64;
+		/*odp_packet_headroom(params->pkt) + odp_packet_len(params->pkt) + 64;*/
+
+	cio->requests[requests_offs].sam_dst_buf.vaddr = odp_packet_data(params->out_pkt);
 	cio->requests[requests_offs].sam_dst_buf.paddr =
-		mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(params->out_pkt)));
+		mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_data(params->out_pkt)));
 
 	cio->sam_op_params[requests_offs].src = &cio->requests[requests_offs].sam_src_buf;
 	cio->sam_op_params[requests_offs].dst = &cio->requests[requests_offs].sam_dst_buf;
