@@ -1084,7 +1084,7 @@ static void setup_worker_qconf(app_args_t *args)
 		out_queue_param.op_mode = ODP_PKTIO_OP_MT_UNSAFE;
 
 		in_queue_param.hash_enable = 1;
-		in_queue_param.hash_proto.proto.ipv4 = 1;
+		in_queue_param.hash_proto.proto.ipv4 = 0;
 		in_queue_param.hash_proto.proto.ipv4_tcp = 1;
 		in_queue_param.hash_proto.proto.ipv4_udp = 1;
 
