@@ -595,45 +595,47 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 		return -1;
 	}
 
-	port_desc.name = pktio_entry->s.name;
-	err = find_port_info(&port_desc);
-	if (err != 0) {
-		ODP_ERR("Port info not found!\n");
-		return -1;
-	}
-
-	memset(name, 0, sizeof(name));
-	snprintf(name, sizeof(name), "ppio-%d:%d", port_desc.pp_id, port_desc.ppio_id);
-	memset(&port_params, 0, sizeof(port_params));
-	port_params.match = name;
-	port_params.type = PP2_PPIO_T_NIC;
-
-	port_params.inqs_params.hash_type = pktio_entry->s.pkt_mvpp2.hash_type;
-	ODP_DBG("hash_type %d\n", port_params.inqs_params.hash_type);
-
-	port_params.inqs_params.num_tcs = MVPP2_MAX_NUM_TCS_PER_PORT;
-	for (i = 0; i < port_params.inqs_params.num_tcs; i++) {
-		port_params.inqs_params.tcs_params[i].pkt_offset = MVPP2_PACKET_OFFSET >> 2;
-		port_params.inqs_params.tcs_params[i].num_in_qs = pktio_entry->s.num_in_queue;
-		memset(inq_params, 0, sizeof(inq_params));
-		for (j = 0; j < port_params.inqs_params.tcs_params[i].num_in_qs; j++)
-			inq_params[j].size = MVPP2_RXQ_SIZE;
-		port_params.inqs_params.tcs_params[i].inqs_params = inq_params;
-		port_params.inqs_params.tcs_params[i].pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
-	}
-	port_params.outqs_params.num_outqs = MVPP2_MAX_NUM_TCS_PER_PORT;
-	for (i = 0; i < port_params.outqs_params.num_outqs; i++) {
-		port_params.outqs_params.outqs_params[i].size = MVPP2_TXQ_SIZE;
-		port_params.outqs_params.outqs_params[i].weight = 1;
-	}
-	err = pp2_ppio_init(&port_params, &pktio_entry->s.pkt_mvpp2.ppio);
-	if (err != 0) {
-		ODP_ERR("PP-IO init failed!\n");
-		return -1;
-	}
 	if (!pktio_entry->s.pkt_mvpp2.ppio) {
-		ODP_ERR("PP-IO init failed!\n");
-		return -1;
+		port_desc.name = pktio_entry->s.name;
+		err = find_port_info(&port_desc);
+		if (err != 0) {
+			ODP_ERR("Port info not found!\n");
+			return -1;
+		}
+
+		memset(name, 0, sizeof(name));
+		snprintf(name, sizeof(name), "ppio-%d:%d", port_desc.pp_id, port_desc.ppio_id);
+		memset(&port_params, 0, sizeof(port_params));
+		port_params.match = name;
+		port_params.type = PP2_PPIO_T_NIC;
+
+		port_params.inqs_params.hash_type = pktio_entry->s.pkt_mvpp2.hash_type;
+		ODP_DBG("hash_type %d\n", port_params.inqs_params.hash_type);
+
+		port_params.inqs_params.num_tcs = MVPP2_MAX_NUM_TCS_PER_PORT;
+		for (i = 0; i < port_params.inqs_params.num_tcs; i++) {
+			port_params.inqs_params.tcs_params[i].pkt_offset = MVPP2_PACKET_OFFSET >> 2;
+			port_params.inqs_params.tcs_params[i].num_in_qs = pktio_entry->s.num_in_queue;
+			memset(inq_params, 0, sizeof(inq_params));
+			for (j = 0; j < port_params.inqs_params.tcs_params[i].num_in_qs; j++)
+				inq_params[j].size = MVPP2_RXQ_SIZE;
+			port_params.inqs_params.tcs_params[i].inqs_params = inq_params;
+			port_params.inqs_params.tcs_params[i].pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
+		}
+		port_params.outqs_params.num_outqs = MVPP2_MAX_NUM_TCS_PER_PORT;
+		for (i = 0; i < port_params.outqs_params.num_outqs; i++) {
+			port_params.outqs_params.outqs_params[i].size = MVPP2_TXQ_SIZE;
+			port_params.outqs_params.outqs_params[i].weight = 1;
+		}
+		err = pp2_ppio_init(&port_params, &pktio_entry->s.pkt_mvpp2.ppio);
+		if (err != 0) {
+			ODP_ERR("PP-IO init failed!\n");
+			return -1;
+		}
+		if (!pktio_entry->s.pkt_mvpp2.ppio) {
+			ODP_ERR("PP-IO init failed!\n");
+			return -1;
+		}
 	}
 
 	pp2_ppio_set_loopback(pktio_entry->s.pkt_mvpp2.ppio, pktio_entry->s.config.enable_loop);
@@ -676,6 +678,11 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 	u32	 num_rxq = param->num_queues;
 
 	ODP_ASSERT(num_rxq == pktio_entry->s.num_in_queue);
+
+	if (pktio_entry->s.pkt_mvpp2.ppio) {
+		ODP_ERR("Port already initialized, configuration cannot be changed\n");
+		return -ENOTSUP;
+	}
 
 	/* TODO: only support now RSS; no support for QoS; how to translate rxq_id to tc/qid???? */
 	max_num_hwrx_qs = (MVPP2_MAX_NUM_TCS_PER_PORT * MVPP2_MAX_NUM_QS_PER_TC);
@@ -720,6 +727,11 @@ static int mvpp2_output_queues_config(pktio_entry_t *pktio_entry,
 	u32	max_num_hwrx_qs, num_txq = param->num_queues;
 
 	ODP_ASSERT(num_txq == pktio_entry->s.num_out_queue);
+
+	if (pktio_entry->s.pkt_mvpp2.ppio) {
+		ODP_ERR("Port already initialized, configuration cannot be changed\n");
+		return -ENOTSUP;
+	}
 
 	/* TODO: only support now RSS; no support for QoS; how to translate rxq_id to tc/qid???? */
 	max_num_hwrx_qs = (MVPP2_MAX_NUM_TCS_PER_PORT * MVPP2_MAX_NUM_QS_PER_TC);
