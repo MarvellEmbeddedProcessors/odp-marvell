@@ -723,8 +723,7 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 static int mvpp2_output_queues_config(pktio_entry_t *pktio_entry,
 				      const odp_pktout_queue_param_t *param)
 {
-	int	i, j;
-	u32	max_num_hwrx_qs, num_txq = param->num_queues;
+	u32 max_num_hwrx_qs, num_txq = param->num_queues;
 
 	ODP_ASSERT(num_txq == pktio_entry->s.num_out_queue);
 
@@ -740,18 +739,6 @@ static int mvpp2_output_queues_config(pktio_entry_t *pktio_entry,
 			pktio_entry->s.num_out_queue,
 			max_num_hwrx_qs);
 		return -1;
-	}
-
-	for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++) {
-		for (j = 0; j < MAX_NUM_OUTQS_PER_CORE; j++) {
-			if (pktio_entry->s.param.out_mode == ODP_PKTOUT_MODE_TM)
-				pktio_entry->s.pkt_mvpp2.shadow_qs[i][j].lockless = 1;
-			else
-				pktio_entry->s.pkt_mvpp2.shadow_qs[i][j].lockless =
-					(param->op_mode == ODP_PKTIO_OP_MT_UNSAFE);
-			if (!pktio_entry->s.pkt_mvpp2.shadow_qs[i][j].lockless)
-				odp_ticketlock_init(&pktio_entry->s.pkt_mvpp2.shadow_qs[i][j].lock);
-		}
 	}
 
 	return 0;
@@ -1068,8 +1055,6 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	}
 #ifndef USE_HW_BUFF_RECYLCE
 	shadow_q = &pkt_mvpp2->shadow_qs[get_thr_id()][tc];
-	if (!shadow_q->lockless)
-		odp_ticketlock_lock(&shadow_q->lock);
 	if (shadow_q->size)
 		mvpp2_free_sent_buffers(pkt_mvpp2->ppio, hif, shadow_q, tc);
 
@@ -1141,8 +1126,6 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 
 		shadow_q->write_ind = (shadow_q->write_ind + 1) & SHADOW_Q_MAX_SIZE_MASK;
 		shadow_q->size++;
-		if (!shadow_q->lockless)
-			odp_ticketlock_unlock(&shadow_q->lock);
 #endif /* USE_HW_BUFF_RECYLCE */
 		idx++;
 		if (odp_unlikely(idx == MVPP2_MAX_TX_BURST_SIZE)) {
