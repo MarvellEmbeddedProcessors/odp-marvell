@@ -777,9 +777,15 @@ static int mvpp2_mac_get(pktio_entry_t *pktio_entry,
 static int mvpp2_promisc_mode_set(pktio_entry_t *pktio_entry,  int enable)
 {
 	int err;
-	err = pp2_ppio_set_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, enable);
-	if (err) {
-		err = -1;
+
+	if (!pktio_entry->s.pkt_mvpp2.ppio) {
+		err = promisc_mode_set_fd(pktio_entry->s.pkt_mvpp2.sockfd,
+					  pktio_entry->s.name,
+					  enable);
+	} else {
+		err = pp2_ppio_set_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, enable);
+		if (err)
+			err = -1;
 	}
 
 	return err;
@@ -789,9 +795,12 @@ static int mvpp2_promisc_mode_get(pktio_entry_t *pktio_entry)
 {
 	int err, enable = 0;
 
-	err = pp2_ppio_get_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, &enable);
-	if (err) {
-		enable = -1;
+	if (!pktio_entry->s.pkt_mvpp2.ppio) {
+		enable = promisc_mode_get_fd(pktio_entry->s.pkt_mvpp2.sockfd, pktio_entry->s.name);
+	} else {
+		err = pp2_ppio_get_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, &enable);
+		if (err)
+			enable = -1;
 	}
 
 	return enable;
@@ -801,6 +810,9 @@ static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 {
 	/* Returns false (zero) if link is down or true(one) if link is up */
 	int err, link_up = 0;
+
+	if (!pktio_entry->s.pkt_mvpp2.ppio)
+		return 0;
 
 	err = pp2_ppio_get_link_state(pktio_entry->s.pkt_mvpp2.ppio, &link_up);
 	if (err) {
