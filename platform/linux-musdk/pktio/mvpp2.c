@@ -1072,6 +1072,13 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	for (i = 0; i < num_pkts; i++) {
 		pkt = pkt_table[i];
 		len = odp_packet_len(pkt);
+		if ((len - ODPH_ETHHDR_LEN) > pktio_entry->s.pkt_mvpp2.mtu) {
+			if (i == 0) {
+				__odp_errno = EMSGSIZE;
+				return -1;
+			}
+			break;
+		}
 		pkt_hdr = odp_packet_hdr(pkt);
 		pa = mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(pkt)));
 		pp2_ppio_outq_desc_reset(&descs[idx]);
