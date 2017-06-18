@@ -506,6 +506,9 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 		return -1;
 	}
 
+	/* Init pktio entry */
+	memset(&pktio_entry->s.pkt_mvpp2, 0, sizeof(pkt_mvpp2_t));
+
 	/* Allocate a dedicated pool for this port */
 	pool_id = find_free_bpool();
 	if (pool_id < 0) {
