@@ -259,7 +259,7 @@ typedef struct {
 	uint8_t src_dev; //bit[0..4]
 	uint8_t src_port;//bit[3..7]
 	uint16_t vid;   // bit[0..11]
-	uint8_t resv1;
+	uint8_t word1_byte3;
 	uint8_t resv2;
 	uint8_t resv3;
 	uint8_t dst_dev; //bit[0..4]
@@ -698,7 +698,7 @@ static int process_fromcpu_lan(odp_packet_t pkt)
     dsaFill.src_dev |= gbl_args->appl.src_dev_id & DEV_ID_MASK;
     /* bit[23,19]:63(src_port) */
     dsaFill.src_port = DSA_SRC_PORT_CPU << 3;
-    dsaFill.resv1 = 0x20;
+    dsaFill.word1_byte3 = 0x20;
     dsaFill.vid  = htons((1 << 12) | gbl_args->appl.lan_vid);
 
     pktio.tx_idx = 0;
@@ -750,7 +750,7 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
     dsaFill.src_dev |= gbl_args->appl.src_dev_id & DEV_ID_MASK;
     /* bit[23,19]:63(src_port) */
     dsaFill.src_port = DSA_SRC_PORT_CPU << 3;
-    dsaFill.resv1 = 0x20;
+    dsaFill.word1_byte3 = 0x20;
     dsaFill.vid  = htons((1 << 12) | gbl_args->appl.wan_vid[rx_pktio->rx_idx - gbl_args->appl.if_phy_count - 1]);
 
     tx_idx = gbl_args->appl.if_phy_count - 1;
@@ -905,6 +905,8 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				target_ip = ip_table_lookup(snat_ipv4.src_ip);
 				// No match in IP table, probably control plane packets, drop it
 				if (odp_unlikely(!target_ip)) {
+					if (odp_unlikely(gbl_args->appl.debug_mode))
+						printf("not found in SNAT and target_ip doesn't exist");
 					return 1;
 				}
 
@@ -990,6 +992,14 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 		if (odp_unlikely(j == NAT_TBL_DEPTH)) {
 			printf("no place for %08x %d %08x %d %d\n", snat_ipv4.src_ip, snat_ipv4.src_port, snat_ipv4.dst_ip, snat_ipv4.dst_port, snat_ipv4.protocol);
 			return 1;
+		}
+       } else {
+		if (odp_unlikely(gbl_args->appl.debug_mode)) {
+			if(!udphdr) {
+				printf("do_snat invalid udphdr. check ethtype after DSA header\n");
+			} else {
+				printf("do_snat invalid ipv4hdr\n");
+			}
 		}
 	}
 
@@ -1088,6 +1098,14 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 				break;
 		}
 		ipv4hdr->chksum = 0;
+	} else {
+		if (odp_unlikely(gbl_args->appl.debug_mode)) {
+			if(!udphdr) {
+				printf("do_dnat invalid udphdr. check ethtype after DSA header\n");
+			} else {
+				printf("do_dnat invalid ipv4hdr\n");
+			}
+		}
 	}
 	return 0;
 }
@@ -1112,17 +1130,20 @@ static inline odph_nat_pkt_type_e get_pkt_type(odp_packet_t pkt, odp_nat_pktio_t
 
             // Data Plane
             if(((ntohs(eth->dsa.src_dev) >> 14) & 0x3) == DSA_FORWARD_E) {
-                // If from LAN VID
-                if ((ntohs(eth->dsa.vid) & VID_MASK) == gbl_args->appl.lan_vid)
-                    return DATA_PLANE_FROM_LAN;
-                else
-                    return DATA_PLANE_FROM_WAN;
+			// If from LAN VID
+			//if ((ntohs(eth->dsa.vid) & VID_MASK) == gbl_args->appl.lan_vid)
+			//Forward DSA tag Routed bit
+			if (eth->dsa.word1_byte3 & 0x2)
+				return DATA_PLANE_FROM_LAN;
+			else
+				return DATA_PLANE_FROM_WAN;
             } else { // Control Plane
-                // If from LAN VID
-                if ((ntohs(eth->dsa.vid) & VID_MASK) == gbl_args->appl.lan_vid)
-                    return CONTROL_PLANE_TO_CPU_LAN;
-                else
-                    return CONTROL_PLANE_TO_CPU_WAN;
+			// If from LAN VID
+			//if ((ntohs(eth->dsa.vid) & VID_MASK) == gbl_args->appl.lan_vid)
+			if (eth->dsa.word1_byte3 & 0x2)
+				return CONTROL_PLANE_TO_CPU_LAN;
+			else
+				return CONTROL_PLANE_TO_CPU_WAN;
             }
         } else { // From TAP interfaces
             //the first tap interface is LAN
