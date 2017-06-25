@@ -1142,8 +1142,9 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 	unsigned i;
 	int proceed = 0;//0: to send, 1: to drop, 2: been sent
 	int sent = 0;
+	int control_sent = 0;
 
-	for (i = 0, sent = 0; i < num; ++i) {
+	for (i = 0; i < num; ++i) {
 		pkt = pkt_tbl[i];
 		if (num - i > PREFETCH_SHIFT)
 			odp_packet_prefetch(pkt_tbl[i + PREFETCH_SHIFT], ODPH_ETHHDR_LEN, ODPH_IPV4HDR_LEN + 12);
@@ -1222,11 +1223,12 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
             case 1:
                 odp_packet_free(pkt);
                 if (odp_unlikely(gbl_args->appl.debug_mode))
-                printf("Dropped\n");
+			printf("Dropped\n");
                 break;
             case 2:
+		control_sent++;
                 if (odp_unlikely(gbl_args->appl.debug_mode))
-                printf("Sent to Control Plane\n");
+			printf("Sent to Control Plane\n");
             default:
                 break;
         }
@@ -1235,7 +1237,7 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 	if (odp_likely(sent))
 		sent = odp_pktout_send(pktio->pktout, send_pkt_tbl, sent);
 
-	return sent;
+	return (sent + control_sent);
 }
 
 static void print_nat_table(nat_entry_t nat_tbl[][NAT_TBL_DEPTH], unsigned int tbl_size, unsigned int tbl_depth, const char *msg)
