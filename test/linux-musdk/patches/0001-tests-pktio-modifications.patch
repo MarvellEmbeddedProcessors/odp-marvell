@@ -1,4 +1,4 @@
-From 18be845378fb08a2a62fa54cc803e26f3ba88dc2 Mon Sep 17 00:00:00 2001
+From 125eec760d1247a1992da1e97eb91720b65f366b Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Sun, 18 Jun 2017 13:09:49 +0300
 Subject: [PATCH] tests: pktio modifications
@@ -6,19 +6,27 @@ Subject: [PATCH] tests: pktio modifications
 Change-Id: Ie26a773c728bd55249d621877f4028ba31785381
 Signed-off-by: Liron Himi <lironh@marvell.com>
 ---
- test/common_plat/validation/api/pktio/pktio.c | 17 ++++++++++++++---
- 1 file changed, 14 insertions(+), 3 deletions(-)
+ test/common_plat/validation/api/pktio/pktio.c | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
 
 diff --git a/test/common_plat/validation/api/pktio/pktio.c b/test/common_plat/validation/api/pktio/pktio.c
-index a6a18c3..3c5030b 100644
+index a6a18c3..8a9a94e 100644
 --- a/test/common_plat/validation/api/pktio/pktio.c
 +++ b/test/common_plat/validation/api/pktio/pktio.c
-@@ -352,6 +352,17 @@ static odp_pktio_t create_pktio(int iface_idx, odp_pktin_mode_t imode,
+@@ -16,6 +16,7 @@
+ #define PKT_BUF_NUM            32
+ #define PKT_BUF_SIZE           (9 * 1024)
+ #define PKT_LEN_NORMAL         64
++#define PKT_LEN_NORMAL_CRC     (PKT_LEN_NORMAL + 4)
+ #define PKT_LEN_MAX            (PKT_BUF_SIZE - ODPH_ETHHDR_LEN - \
+ 				ODPH_IPV4HDR_LEN - ODPH_UDPHDR_LEN)
+ 
+@@ -352,6 +353,17 @@ static odp_pktio_t create_pktio(int iface_idx, odp_pktin_mode_t imode,
  	CU_ASSERT(odp_pktin_queue_config(pktio, &pktin_param) == 0);
  	CU_ASSERT(odp_pktout_queue_config(pktio, NULL) == 0);
  
 +	if (num_ifaces == 1) {
-+		/* To remove dependency in external loopback connector, 
++		/* To remove dependency in external loopback connector,
 +		we can configure the PKTIO in loopback mode */
 +		odp_pktio_capability_t capa = {0};
 +		odp_pktio_config_t config = {0};
@@ -31,7 +39,23 @@ index a6a18c3..3c5030b 100644
  	if (wait_for_network)
  		odp_time_wait_ns(ODP_TIME_SEC_IN_NS / 4);
  
-@@ -1998,7 +2009,7 @@ static int create_pool(const char *iface, int num)
+@@ -1486,13 +1498,13 @@ void pktio_test_statistics_counters(void)
+ 			  (stats[1].in_ucast_pkts >= (uint64_t)pkts));
+ 		CU_ASSERT((stats[0].out_octets == 0) ||
+ 			  (stats[0].out_octets >=
+-			  (PKT_LEN_NORMAL * (uint64_t)pkts)));
++			  (PKT_LEN_NORMAL_CRC * (uint64_t)pkts)));
+ 	} else {
+ 		CU_ASSERT((stats[0].in_ucast_pkts == 0) ||
+ 			  (stats[0].in_ucast_pkts == (uint64_t)pkts));
+ 		CU_ASSERT((stats[0].in_octets == 0) ||
+ 			  (stats[0].in_octets ==
+-			  (PKT_LEN_NORMAL * (uint64_t)pkts)));
++			  (PKT_LEN_NORMAL_CRC * (uint64_t)pkts)));
+ 	}
+ 
+ 	CU_ASSERT(0 == stats[0].in_discards);
+@@ -1998,7 +2010,7 @@ static int create_pool(const char *iface, int num)
  
  	memset(&params, 0, sizeof(params));
  	set_pool_len(&params);
@@ -40,17 +64,6 @@ index a6a18c3..3c5030b 100644
  	params.type        = ODP_POOL_PACKET;
  
  	snprintf(pool_name, sizeof(pool_name), "pkt_pool_%s_%d",
-@@ -2125,8 +2136,8 @@ odp_testinfo_t pktio_suite_unsegmented[] = {
- 	ODP_TEST_INFO(pktio_test_plain_multi_event),
- 	ODP_TEST_INFO(pktio_test_sched_multi_event),
- 	ODP_TEST_INFO(pktio_test_recv_multi_event),
--	ODP_TEST_INFO_CONDITIONAL(pktio_test_statistics_counters,
--				  pktio_check_statistics_counters),
-+/*	ODP_TEST_INFO_CONDITIONAL(pktio_test_statistics_counters,
-+				  pktio_check_statistics_counters), */
- 	ODP_TEST_INFO_CONDITIONAL(pktio_test_pktin_ts,
- 				  pktio_check_pktin_ts),
- 	ODP_TEST_INFO_NULL
 -- 
 2.7.4
 
