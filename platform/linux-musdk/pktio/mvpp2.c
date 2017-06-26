@@ -750,6 +750,7 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 		memset(&port_params, 0, sizeof(port_params));
 		port_params.match = name;
 		port_params.type = PP2_PPIO_T_NIC;
+		port_params.maintain_stats = true;
 
 		port_params.inqs_params.hash_type = pktio_entry->s.pkt_mvpp2.hash_type;
 		ODP_DBG("hash_type %d\n", port_params.inqs_params.hash_type);
@@ -778,6 +779,8 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 			ODP_ERR("PP-IO init failed!\n");
 			return -1;
 		}
+
+		pktio_entry->s.ops->stats_reset(pktio_entry);
 	}
 
 	pp2_ppio_set_loopback(pktio_entry->s.pkt_mvpp2.ppio, pktio_entry->s.config.enable_loop);
@@ -890,17 +893,49 @@ static int mvpp2_output_queues_config(pktio_entry_t *pktio_entry,
 static int mvpp2_stats(pktio_entry_t *pktio_entry,
 		       odp_pktio_stats_t *stats)
 {
-	NOTUSED(pktio_entry);
-	NOTUSED(stats);
-	ODP_UNIMPLEMENTED();
+	struct pp2_ppio_statistics ppio_stats;
+	int err;
+
+	if (!pktio_entry->s.pkt_mvpp2.ppio) {
+		memset(stats, 0, sizeof(odp_pktio_stats_t));
+		return 0;
+	}
+
+	err = pp2_ppio_get_statistics(pktio_entry->s.pkt_mvpp2.ppio,
+				      &ppio_stats,
+				      false);
+	if (err)
+		return -1;
+	stats->in_octets = ppio_stats.rx_bytes;
+	stats->in_ucast_pkts = ppio_stats.rx_unicast_packets;
+	stats->in_discards = ppio_stats.rx_fullq_dropped +
+			     ppio_stats.rx_bm_dropped +
+			     ppio_stats.rx_early_dropped +
+			     ppio_stats.rx_fifo_dropped +
+			     ppio_stats.rx_cls_dropped;
+	stats->in_errors = ppio_stats.rx_errors +
+			   pktio_entry->s.stats.in_errors;
+	stats->in_unknown_protos = 0;
+	stats->out_octets = ppio_stats.tx_bytes;
+	stats->out_ucast_pkts = ppio_stats.tx_unicast_packets;
+	stats->out_discards = 0;
+	stats->out_errors = ppio_stats.tx_errors;
 
 	return 0;
 }
 
 static int mvpp2_stats_reset(pktio_entry_t *pktio_entry)
 {
-	NOTUSED(pktio_entry);
-	ODP_UNIMPLEMENTED();
+	if (pktio_entry->s.pkt_mvpp2.ppio)
+		pp2_ppio_get_statistics(pktio_entry->s.pkt_mvpp2.ppio,
+					NULL,
+					true);
+	/* Some HW counters needs to be updated with SW counters.
+	* For that we have the statistics structure as part
+	* of the PKTIO structure.
+	* Currently only in_errors is being updated in receive function */
+	pktio_entry->s.stats.in_errors = 0;
+
 	return 0;
 }
 
@@ -1011,7 +1046,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 
 			desc_err = pp2_ppio_inq_desc_get_l2_pkt_error(&descs[j]);
 			if (odp_unlikely(desc_err != PP2_DESC_ERR_OK)) {
-				/* Always drop L2 errors */
+				/* Always drop L2 errors.
+				* Counter MIB already updated */
 				ODP_DBG("Drop packet with L2 error: %d", desc_err);
 				odp_packet_free(pkt);
 				continue;
@@ -1031,6 +1067,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 					pkt_hdr->p.error_flags.ip_err)) {
 					ODP_DBG("Drop packet with L3 error: %d", desc_err);
 					odp_packet_free(pkt);
+					/* Need to update in_errors counter */
+					pktio_entry->s.stats.in_errors++;
 					continue;
 				}
 			}
@@ -1047,6 +1085,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 					 pktio_entry->s.config.pktin.bit.drop_tcp_err))) {
 					ODP_DBG("Drop packet with L4 error: %d", desc_err);
 					odp_packet_free(pkt);
+					/* Need to update in_errors counter */
+					pktio_entry->s.stats.in_errors++;
 					continue;
 				}
 			}
