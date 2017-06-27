@@ -84,6 +84,8 @@
 #define DEFAULT_AGING_TIME	300
 #define MAX_AGING_TIME		3600
 
+#define DSA_CPU_CODE		0x2
+
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
 			    strrchr((file_name), '/') + 1 : (file_name))
@@ -278,6 +280,8 @@ static int exit_threads;	/**< Break workers loop if set to 1 */
 static args_t *gbl_args;
 /** Global barrier to synchronize main and workers */
 static odp_barrier_t barrier;
+
+static odp_pool_t gbl_tap_pool;
 
 static uint16_t net_cksum(uint8_t *ptr, int len)
 {
@@ -792,6 +796,18 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
         return 1;
 }
 
+static int is_control_sent_to_nat(odp_packet_t pkt)
+{
+	odph_dsa_ethhdr_t *eth;
+
+	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+	//check CPU_CODE bit1 (DSA word0, bit 16)
+	if (eth->dsa.src_port & (DSA_CPU_CODE >> 1))
+		return 1;
+
+	return 0;
+}
+
 static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 {
 	unsigned i, j;
@@ -1164,12 +1180,13 @@ static inline odph_nat_pkt_type_e get_pkt_type(odp_packet_t pkt, odp_nat_pktio_t
 
 static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pktio)
 {
-	odp_packet_t pkt;
+	odp_packet_t pkt, pkt_copy;
 	odp_packet_t send_pkt_tbl[MAX_PKT_BURST];
 	unsigned i;
 	int proceed = 0;//0: to send, 1: to drop, 2: been sent
 	int sent = 0;
 	int control_sent = 0;
+	int res;
 
 	for (i = 0; i < num; ++i) {
 		pkt = pkt_tbl[i];
@@ -1204,13 +1221,56 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     printf("It is CONTROL_PLANE_TO_CPU_LAN\n");
                 }
-                proceed = process_tocpu_lan(pkt);
+                //check if additional NAT processing in required for control pkt
+                if (is_control_sent_to_nat(pkt)) {
+			if (odp_unlikely(gbl_args->appl.debug_mode)) {
+			    printf("Control packet should be sent to SNAT\n");
+			}
+			proceed = do_snat(pkt, gbl_args->snat_tbl);
+			//ref count doesn't exist in current ODP version
+			pkt_copy = odp_packet_copy(pkt, gbl_tap_pool);
+			if (odp_likely(pkt_copy != ODP_PACKET_INVALID)) {
+				res = process_tocpu_lan(pkt_copy);
+				if (odp_unlikely(res == 1)) {
+					odp_packet_free(pkt_copy);
+					if (odp_unlikely(gbl_args->appl.debug_mode))
+						printf("Control Plane packet dropped\n");
+				} else {
+					if (odp_unlikely(gbl_args->appl.debug_mode))
+						printf("Sent to Control Plane\n");
+				}
+			}
+                } else {
+			proceed = process_tocpu_lan(pkt);
+		}
                 break;
             case CONTROL_PLANE_TO_CPU_WAN:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     printf("It is CONTROL_PLANE_TO_CPU_WAN\n");
                 }
-                proceed = process_tocpu_wan(pkt);
+                //check if additional NAT processing in required for control pkt
+                if (is_control_sent_to_nat(pkt)) {
+			if (odp_unlikely(gbl_args->appl.debug_mode)) {
+			    printf("Control packet should be sent to DNAT\n");
+			}
+			proceed = do_dnat(pkt, gbl_args->dnat_tbl);
+			//ref count doesn't exist in current ODP version
+			pkt_copy = odp_packet_copy(pkt, gbl_tap_pool);
+			if (odp_likely(pkt_copy != ODP_PACKET_INVALID)) {
+				res = process_tocpu_wan(pkt_copy);
+				if (odp_unlikely(res == 1)) {
+					odp_packet_free(pkt_copy);
+					if (odp_unlikely(gbl_args->appl.debug_mode))
+						printf("Control Plane packet dropped\n");
+				} else {
+					if (odp_unlikely(gbl_args->appl.debug_mode))
+						printf("Sent to Control Plane\n");
+				}
+			} else
+				printf("Invalid packet copy\n");
+		} else {
+			proceed = process_tocpu_wan(pkt);
+		}
                 break;
             case CONTROL_PLANE_FROM_CPU_LAN:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
@@ -2229,6 +2289,7 @@ int main(int argc, char *argv[])
 	odp_pool_print(pool);
 
 	pool_tap = odp_pool_create("packet tap pool", &params);
+	gbl_tap_pool = pool_tap;
 	if (pool_tap == ODP_POOL_INVALID) {
 		printf("Error: packet pool create failed.\n");
 		exit(EXIT_FAILURE);
