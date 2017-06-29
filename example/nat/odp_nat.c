@@ -61,7 +61,7 @@
 #define MAX_PKTIOS             4
 
 #define NAT_TBL_SIZE           (64 * 1024)
-#define NAT_TBL_DEPTH          4
+#define NAT_TBL_DEPTH          8
 
 #define IP_MAP_TBL_SIZE        128
 
@@ -387,13 +387,14 @@ static inline uint16_t allocate_node_for_pool(odph_nat_pool_t* pool)
 	odph_nat_node_t* ptr = pool->head;
 
 	odp_rwlock_write_lock(&pool->lock);
-	if (pool->head) {
+	if (odp_likely(pool->head != NULL)) {
 		pool->head = pool->head->next;
-		pool->head->prev = NULL;
+		if (odp_likely(pool->head != NULL))
+			pool->head->prev = NULL;
 	}
 	odp_rwlock_write_unlock(&pool->lock);
 
-	if (ptr)
+	if (odp_likely(ptr != NULL))
 		return ptr->value;
 	else
 		return 0;
@@ -935,6 +936,11 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 					default:
 						break;
 				}
+
+			if (odp_unlikely(tbl[hash_index][j].target_port == 0)) {
+				odp_rwlock_write_unlock(&gbl_args->snat_lock);
+				return 1;
+			}
 				tbl[hash_index][j].valid = 1;
 				odp_rwlock_write_unlock(&gbl_args->snat_lock);
 
