@@ -122,11 +122,15 @@ struct odp_netmap_buf_info {
 /* Common buffer header */
 struct odp_buffer_hdr_t {
 	struct odp_buffer_hdr_t *next;       /* next buf in a list--keep 1st */
+	odp_buffer_bits_t        handle;     /* handle */
+	odp_pool_t               pool_hdl;   /* buffer pool handle */
+	uint32_t                 size;       /* max data size */
+	uint32_t                 segcount;   /* segment count */
+	void                    *addr[ODP_BUFFER_MAX_SEG]; /* block addrs */
 	union {                              /* Multi-use secondary link */
 		struct odp_buffer_hdr_t *prev;
 		struct odp_buffer_hdr_t *link;
 	};
-	odp_buffer_bits_t        handle;     /* handle */
 
 	int burst_num;
 	int burst_first;
@@ -148,8 +152,6 @@ struct odp_buffer_hdr_t {
 	int16_t                  allocator;  /* allocating thread id */
 	int8_t                   type;       /* buffer type */
 	odp_event_type_t         event_type; /* for reuse as event */
-	uint32_t                 size;       /* max data size */
-	odp_pool_t               pool_hdl;   /* buffer pool handle */
 	union {
 		uint64_t         buf_u64;    /* user u64 */
 		void            *buf_ctx;    /* user context */
@@ -157,9 +159,7 @@ struct odp_buffer_hdr_t {
 	};
 	void                    *uarea_addr; /* user area address */
 	uint32_t                 uarea_size; /* size of user area */
-	uint32_t                 segcount;   /* segment count */
 	uint32_t                 segsize;    /* segment size */
-	void                    *addr[ODP_BUFFER_MAX_SEG]; /* block addrs */
 	uint64_t                 order;      /* sequence for ordered queues */
 	queue_entry_t           *origin_qe;  /* ordered queue origin */
 	union {
