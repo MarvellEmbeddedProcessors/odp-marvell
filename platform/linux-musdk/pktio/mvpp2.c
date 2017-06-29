@@ -28,9 +28,11 @@
 #include <drivers/mv_pp2_bpool.h>
 #include <drivers/mv_pp2_ppio.h>
 
-
 #define USE_LPBK_SW_RECYLCE
 
+/* prefetch=2, tested to be optimal both for
+   mvpp2_recv() & mvpp2_send() prefetch operations */
+#define MVPP2_PREFETCH_SHIFT		2
 
 /*#define USE_HW_BUFF_RECYLCE*/
 #define MAX_NUM_PACKPROCS		1
@@ -1031,6 +1033,20 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			num = MVPP2_MAX_RX_BURST_SIZE;
 		pp2_ppio_recv(pktio_entry->s.pkt_mvpp2.ppio, tc, qid, descs, &num);
 		for (j = 0; j < num; j++) {
+			if ((num - j) > MVPP2_PREFETCH_SHIFT) {
+				struct pp2_ppio_desc *pref_desc;
+				u64 pref_addr;
+				odp_packet_hdr_t *pref_pkt_hdr;
+
+				pref_desc = &descs[j + MVPP2_PREFETCH_SHIFT];
+				pref_addr =
+					pp2_ppio_inq_desc_get_cookie(pref_desc);
+				pref_pkt_hdr =
+					odp_packet_hdr((odp_packet_t)pref_addr);
+				odp_prefetch(pref_pkt_hdr);
+				odp_prefetch(&pref_pkt_hdr->p);
+			}
+
 			pkt_table[total_got] = (odp_packet_t)pp2_ppio_inq_desc_get_cookie(&descs[j]);
 			len = pp2_ppio_inq_desc_get_pkt_len(&descs[j]);
 
@@ -1167,6 +1183,15 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 #endif /* !USE_HW_BUFF_RECYLCE */
 
 	for (i = 0; i < num_pkts; i++) {
+		if ((num_pkts - i) > MVPP2_PREFETCH_SHIFT) {
+			odp_packet_t pref_pkt;
+			odp_packet_hdr_t *pref_pkt_hdr;
+
+			pref_pkt = pkt_table[i + MVPP2_PREFETCH_SHIFT];
+			pref_pkt_hdr = odp_packet_hdr(pref_pkt);
+			odp_prefetch(pref_pkt_hdr);
+			odp_prefetch(&pref_pkt_hdr->p);
+		}
 		pkt = pkt_table[i];
 		len = odp_packet_len(pkt);
 		if ((len - ODPH_ETHHDR_LEN) > pktio_entry->s.pkt_mvpp2.mtu) {
