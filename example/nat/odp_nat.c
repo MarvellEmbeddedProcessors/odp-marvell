@@ -155,6 +155,8 @@ typedef struct ipv4_5tuple_t {
 	uint16_t src_port;
 	uint16_t dst_port;
 	uint8_t  protocol;
+	uint8_t pad1;
+	uint16_t pad2;
 } ipv4_5tuple_t;
 
 typedef struct snat_entry_t {
@@ -858,6 +860,8 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 		snat_ipv4.src_ip = ntohl(ipv4hdr->src_addr);
 		snat_ipv4.dst_ip = ntohl(ipv4hdr->dst_addr);
 		snat_ipv4.protocol = ipv4hdr->proto;
+		snat_ipv4.pad1 = 0;
+		snat_ipv4.pad2 = 0;
 		if (odp_likely(snat_ipv4.protocol != ODPH_IPPROTO_ICMP)) {
 			snat_ipv4.src_port = ntohs(udphdr->src_port);
 			snat_ipv4.dst_port = ntohs(udphdr->dst_port);
@@ -971,6 +975,8 @@ static int do_snat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 					dnat_ipv4.dst_port = tbl[hash_index][j].target_port;
 					dnat_ipv4.protocol = snat_ipv4.protocol;
 					dnat_ipv4.dst_ip = tbl[hash_index][j].target_ip;
+					dnat_ipv4.pad1 = 0;
+					dnat_ipv4.pad2 = 0;
 					if (odp_unlikely(snat_ipv4.protocol == ODPH_IPPROTO_ICMP)) {
 						dnat_ipv4.src_port = tbl[hash_index][j].target_port;
 						dnat_ipv4.dst_port = 0;
@@ -1057,6 +1063,8 @@ static int do_dnat(odp_packet_t pkt, nat_entry_t tbl[][NAT_TBL_DEPTH])
 		ipv4.src_ip = ntohl(ipv4hdr->src_addr);
 		ipv4.dst_ip = ntohl(ipv4hdr->dst_addr);
 		ipv4.protocol = ipv4hdr->proto;
+		ipv4.pad1 = 0;
+		ipv4.pad2 = 0;
 		if (odp_likely(ipv4.protocol != ODPH_IPPROTO_ICMP)) {
 			ipv4.src_port = ntohs(udphdr->src_port);
 			ipv4.dst_port = ntohs(udphdr->dst_port);
