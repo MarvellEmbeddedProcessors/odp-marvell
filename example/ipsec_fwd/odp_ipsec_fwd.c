@@ -1211,6 +1211,9 @@ pkt_disposition_e do_ipsec_out_seq(odp_packet_t pkt,
 				abort();
 		}
 	}
+	/* reset the L4 flags. the pkt is ESP now */
+	odp_packet_has_tcp_set(pkt, 0);
+	odp_packet_has_udp_set(pkt, 0);
 
 	/* Issue crypto request */
 	int rc = odp_crypto_operation(&ctx->ipsec.params,
