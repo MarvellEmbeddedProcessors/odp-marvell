@@ -1238,10 +1238,25 @@ int main(int argc, char **argv)
 	struct thread_arg_s *thr_arg;
 	char *oif;
 	if_mac_t if_mac_table[MAX_NB_PKTIO];
+	odp_init_t odp_init_params;
+	odp_cpumask_t worker_cpu_mask;
+	odp_cpumask_t control_cpu_mask;
 
-	if (odp_init_global(&instance, NULL, NULL)) {
+	memset(&odp_init_params, 0, sizeof(odp_init_params));
+	odp_cpumask_zero(&control_cpu_mask);
+	odp_cpumask_zero(&worker_cpu_mask);
+	odp_cpumask_set(&control_cpu_mask, 0);
+
+	for (i = 0; i < MAX_NB_WORKER; i++)
+		odp_cpumask_set(&worker_cpu_mask, i);
+
+	odp_init_params.worker_cpus = &worker_cpu_mask;
+	odp_init_params.control_cpus = &control_cpu_mask;
+
+	/* Init ODP before calling anything else */
+	if (odp_init_global(&instance, &odp_init_params, NULL)) {
 		printf("Error: ODP global init failed.\n");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	if (odp_init_local(instance, ODP_THREAD_CONTROL)) {
@@ -1350,14 +1365,6 @@ int main(int argc, char **argv)
 	nb_worker = MAX_NB_WORKER;
 	if (args->worker_count)
 		nb_worker = args->worker_count;
-
-	//WA: don't reserve CPU for control plan and Linux
-	odp_cpumask_zero(&odp_global_data.worker_cpus);
-	odp_cpumask_zero(&odp_global_data.control_cpus);
-	odp_cpumask_set(&odp_global_data.control_cpus, 0);
-	for (i = 0; i < odp_global_data.num_cpus_installed; i++) {
-		odp_cpumask_set(&odp_global_data.worker_cpus, i);
-	}
 
 	nb_worker = odp_cpumask_default_worker(&cpumask, nb_worker);
 	args->worker_count = nb_worker;
