@@ -36,7 +36,7 @@
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
  */
-#define SHM_PKT_POOL_SIZE      1024
+#define SHM_PKT_POOL_SIZE      8192
 
 /** @def SHM_PKT_POOL_BUF_SIZE
  * @brief Buffer size of the packet pool buffer
@@ -46,7 +46,7 @@
 /** @def MAX_PKT_BURST
  * @brief Maximum number of packet in a burst
  */
-#define MAX_PKT_BURST          127
+#define MAX_PKT_BURST          32
 
 /** Maximum number of pktio queues per interface */
 #define MAX_QUEUES             32
@@ -1359,7 +1359,7 @@ int main(int argc, char *argv[])
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
-	params.pkt.num     = SHM_PKT_POOL_SIZE * num_workers;
+	params.pkt.num     = SHM_PKT_POOL_SIZE;
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
