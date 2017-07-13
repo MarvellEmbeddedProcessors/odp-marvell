@@ -14,7 +14,6 @@
 #include <test_debug.h>
 
 #include <odp_api.h>
-#include <odp_debug_internal.h>
 #include <odp/helper/linux.h>
 #include <odp/helper/eth.h>
 #include <odp/helper/ip.h>
@@ -24,19 +23,18 @@
 #include "odp_l3fwd_db.h"
 #include "odp_l3fwd_lpm.h"
 
-#define SHM_PKT_POOL_SIZE_PER_QUEUE	512
+#define POOL_NUM_PKT	8192
 #define POOL_SEG_LEN	1856
-#define MAX_PKT_BURST	64
+#define MAX_PKT_BURST	32
 
-#define MAX_NB_WORKER	4
-#define MAX_NB_PKTIO	4
+#define MAX_NB_WORKER	32
+#define MAX_NB_PKTIO	32
 #define MAX_NB_QUEUE	32
 #define MAX_NB_QCONFS	1024
 #define MAX_NB_ROUTE	32
 
 #define INVALID_ID	(-1)
-#define PRINT_INTERVAL	1	/* interval seconds of printing stats */
-#define PREFETCH_SHIFT	3
+#define PRINT_INTERVAL	10	/* interval seconds of printing stats */
 
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
@@ -84,7 +82,6 @@ typedef struct {
 	uint8_t hash_mode; /* 1:hash, 0:lpm */
 	uint8_t dest_mac_changed[MAX_NB_PKTIO]; /* 1: dest mac from cmdline */
 	int error_check; /* Check packets for errors */
-	int num_buffers_per_queue;
 } app_args_t;
 
 struct {
@@ -345,8 +342,6 @@ static int run_worker(void *arg)
 		while (pkts) {
 			dst_port = dif;
 			for (i = 1; i < pkts; i++) {
-				if (pkts-i > PREFETCH_SHIFT)
-					odp_packet_prefetch(tbl[i+PREFETCH_SHIFT], 0, 64);
 				dif = global.fwd_func(tbl[i], if_idx);
 				if (dif != dst_port)
 					break;
@@ -413,25 +408,6 @@ static int split_string(char *str, int stringlen,
 einval_error:
 	errno = EINVAL;
 	return -1;
-}
-
-static int queues_config(app_args_t *args)
-{
-	int i, j;
-	int nb_qconfs = 0;
-	struct l3fwd_qconf_s *qconf_array = &args->qconf_config[0];
-
-	for (i = 0; i < args->if_count; i++) {
-		for (j = 0; j < args->worker_count; j++) {
-			qconf_array[nb_qconfs].if_idx = i;
-			qconf_array[nb_qconfs].rxq_idx = j;
-			qconf_array[nb_qconfs].core_idx = j;
-			++nb_qconfs;
-		}
-	}
-	args->qconf_count = nb_qconfs;
-
-	return 0;
 }
 
 static int parse_config(char *cfg_str, app_args_t *args)
@@ -524,7 +500,7 @@ static void print_usage(char *progname)
 
 static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 {
-	int opt, qconfig = 0;
+	int opt;
 	int long_index;
 	char *token, *local;
 	size_t len, route_index = 0;
@@ -537,15 +513,13 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		{"duration", required_argument, NULL, 'd'},	/* return 'd' */
 		{"thread", required_argument, NULL, 't'},	/* return 't' */
 		{"queue", required_argument, NULL, 'q'},	/* return 'q' */
-		{"num_buffers_per_queue", required_argument, NULL, 'b'},
 		{"error_check", required_argument, NULL, 'e'},
 		{"help", no_argument, NULL, 'h'},		/* return 'h' */
 		{NULL, 0, NULL, 0}
 	};
-	args->num_buffers_per_queue = 0;
 
 	while (1) {
-		opt = getopt_long(argc, argv, "+s:t:d:i:r:q:e:b:h",
+		opt = getopt_long(argc, argv, "+s:t:d:i:r:q:e:h",
 				  longopts, &long_index);
 
 		if (opt == -1)
@@ -572,9 +546,6 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		/* parse seconds to run */
 		case 'd':
 			args->duration = atoi(optarg);
-			break;
-		case 'b':
-			args->num_buffers_per_queue = atoi(optarg);
 			break;
 
 		/* parse packet-io interface names */
@@ -644,16 +615,12 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 
 		case 'q':
 			parse_config(optarg, args);
-			qconfig = 1;
 			break;
 
 		default:
 			break;
 		}
 	}
-
-	if (!qconfig)
-		queues_config(args);
 
 	/* checking arguments */
 	if (args->if_count == 0) {
@@ -997,7 +964,6 @@ int main(int argc, char **argv)
 
 	/* Clear global argument and initialize the dest mac as 2:0:0:0:0:x */
 	memset(&global, 0, sizeof(global));
-	memset(mac,0,ODPH_ETHADDR_LEN);
 	mac[0] = 2;
 	for (i = 0; i < MAX_NB_PKTIO; i++) {
 		mac[ODPH_ETHADDR_LEN - 1] = (uint8_t)i;
@@ -1049,9 +1015,7 @@ int main(int argc, char **argv)
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = POOL_SEG_LEN;
 	params.pkt.len     = POOL_SEG_LEN;
-	if (args->num_buffers_per_queue == 0)
-		args->num_buffers_per_queue = SHM_PKT_POOL_SIZE_PER_QUEUE;
-	params.pkt.num = args->if_count *(args->num_buffers_per_queue * args->worker_count);
+	params.pkt.num     = POOL_NUM_PKT;
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
@@ -1060,7 +1024,6 @@ int main(int argc, char **argv)
 		printf("Error: packet pool create failed.\n");
 		exit(1);
 	}
-	odp_pool_print(pool);
 
 	/* Resolve fwd db*/
 	for (i = 0; i < args->if_count; i++) {
@@ -1084,14 +1047,6 @@ int main(int argc, char **argv)
 	nb_worker = MAX_NB_WORKER;
 	if (args->worker_count)
 		nb_worker = args->worker_count;
-
-	/* WA: don't reserve CPU for control plan and Linux */
-	odp_cpumask_zero(&odp_global_data.worker_cpus);
-	odp_cpumask_zero(&odp_global_data.control_cpus);
-	odp_cpumask_set(&odp_global_data.control_cpus, 0);
-	for (i = 0; i < odp_global_data.num_cpus_installed; i++)
-		odp_cpumask_set(&odp_global_data.worker_cpus, i);
-
 	nb_worker = odp_cpumask_default_worker(&cpumask, nb_worker);
 	args->worker_count = nb_worker;
 
