@@ -37,7 +37,7 @@
 /** @def MAX_WORKERS
  * @brief Maximum number of worker threads
  */
-#define MAX_WORKERS            32
+#define MAX_WORKERS            4
 
 /** @def SHM_PKT_POOL_SIZE
  * @brief Size of the shared memory block
@@ -2225,9 +2225,23 @@ int main(int argc, char *argv[])
 	stats_t *stats;
 	int if_count;
 	odp_instance_t instance;
+	odp_init_t odp_init_params;
+	odp_cpumask_t worker_cpu_mask;
+	odp_cpumask_t control_cpu_mask;
+
+	memset(&odp_init_params, 0, sizeof(odp_init_params));
+	odp_cpumask_zero(&control_cpu_mask);
+	odp_cpumask_zero(&worker_cpu_mask);
+	odp_cpumask_set(&control_cpu_mask, 0);
+
+	for (i = 0; i < MAX_WORKERS; i++)
+		odp_cpumask_set(&worker_cpu_mask, i);
+
+	odp_init_params.worker_cpus = &worker_cpu_mask;
+	odp_init_params.control_cpus = &control_cpu_mask;
 
 	/* Init ODP before calling anything else */
-	if (odp_init_global(&instance, NULL, NULL)) {
+	if (odp_init_global(&instance, &odp_init_params, NULL)) {
 		printf("Error: ODP global init failed.\n");
 		exit(EXIT_FAILURE);
 	}
@@ -2257,14 +2271,6 @@ int main(int argc, char *argv[])
 	num_workers = MAX_WORKERS;
 	if (gbl_args->appl.cpu_count)
 		num_workers = gbl_args->appl.cpu_count;
-
-	//WA: don't reserve CPU for control plan and Linux
-	odp_cpumask_zero(&odp_global_data.worker_cpus);
-	odp_cpumask_zero(&odp_global_data.control_cpus);
-	odp_cpumask_set(&odp_global_data.control_cpus, 0);
-	for (i = 0; i < odp_global_data.num_cpus_installed; i++) {
-		odp_cpumask_set(&odp_global_data.worker_cpus, i);
-	}
 
 	/* Get default worker cpumask */
 	num_workers = odp_cpumask_default_worker(&cpumask, num_workers);
