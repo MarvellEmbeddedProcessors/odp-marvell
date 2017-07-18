@@ -934,7 +934,7 @@ static void setup_worker_qconf(app_args_t *args)
 
 	/* distribute rx queues among threads as round-robin */
 	if (!args->qconf_count) {
-		if (nb_worker > if_count) {
+		if ((nb_worker >= if_count) && (nb_worker % if_count == 0)) {
 			for (i = 0; i < nb_worker; i++) {
 				arg = &global.worker_args[i];
 				arg->thr_idx = i;
@@ -948,19 +948,26 @@ static void setup_worker_qconf(app_args_t *args)
 				port->rxq_idx++;
 			}
 		} else {
-			for (i = 0; i < if_count; i++) {
-				j = i % nb_worker;
-				arg = &global.worker_args[j];
-				arg->thr_idx = j;
-				port = &global.l3fwd_pktios[i];
-				rxq_idx = arg->pktio[i].nb_rxq;
-				pktio = arg->nb_pktio;
-				arg->pktio[pktio].rxq[rxq_idx] =
-					port->rxq_idx % port->nb_rxq;
-				arg->pktio[pktio].nb_rxq++;
-				arg->pktio[pktio].if_idx = i;
-				arg->nb_pktio++;
-				port->rxq_idx++;
+			for (i = 0; i < args->worker_count; i++) {
+				arg = &global.worker_args[i];
+				arg->thr_idx = i;
+				for (j = 0; j < args->if_count; j++) {
+					port = &global.l3fwd_pktios[j];
+
+					rxq_idx = arg->pktio[j].nb_rxq;
+					arg->pktio[j].rxq[rxq_idx] =
+						port->rxq_idx % port->nb_rxq;
+					pktio = arg->nb_pktio;
+					arg->pktio[pktio].nb_rxq++;
+					arg->pktio[pktio].if_idx = j;
+					arg->nb_pktio++;
+					port->rxq_idx++;
+					ODP_DBG("rxq_idx %d, rxq %d, port->rxq_idx %d, "
+						"port->nb_rxq %d\n",
+						rxq_idx,
+						arg->pktio[j].rxq[rxq_idx],
+						port->rxq_idx, port->nb_rxq);
+				}
 			}
 		}
 	}
