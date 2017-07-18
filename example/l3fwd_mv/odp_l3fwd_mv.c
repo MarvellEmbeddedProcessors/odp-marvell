@@ -10,6 +10,7 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <signal.h>
 
 #include <test_debug.h>
 
@@ -108,6 +109,7 @@ typedef struct {
 /** Global barrier to synchronize main and workers */
 static odp_barrier_t barrier;
 static int exit_threads;	/**< Break workers loop if set to 1 */
+static int glb_stop;
 
 static int create_pktio(const char *name, odp_pool_t pool,
 			struct l3fwd_pktio_s *fwd_pktio)
@@ -1214,13 +1216,21 @@ static int print_speed_stats(int num_workers, int duration, int timeout)
 			pkts_prev = pkts;
 		}
 		elapsed += timeout;
-	} while (loop_forever || (elapsed < duration));
+	} while (!glb_stop && (loop_forever || (elapsed < duration)));
 
 	if (stats_enabled)
 		printf("TEST RESULT: %" PRIu64 " maximum packets per second.\n",
 		       maximum_pps);
 
 	return pkts > 100 ? 0 : -1;
+}
+
+static void sig_int_handler(int sig)
+{
+	if (sig == SIGINT) {
+		glb_stop = 1;
+		exit_threads = 1;
+	}
 }
 
 int main(int argc, char **argv)
@@ -1237,10 +1247,16 @@ int main(int argc, char **argv)
 	app_args_t *args;
 	struct thread_arg_s *thr_arg;
 	char *oif;
+	int ret;
 	if_mac_t if_mac_table[MAX_NB_PKTIO];
 	odp_init_t odp_init_params;
 	odp_cpumask_t worker_cpu_mask;
 	odp_cpumask_t control_cpu_mask;
+
+	if (signal(SIGINT, sig_int_handler) != 0) {
+		printf("Error: register to SIGINT failed\n");
+		exit(EXIT_FAILURE);
+	}
 
 	memset(&odp_init_params, 0, sizeof(odp_init_params));
 	odp_cpumask_zero(&control_cpu_mask);
@@ -1431,6 +1447,26 @@ int main(int argc, char **argv)
 	/* wait for other threads to join */
 	for (i = 0; i < nb_worker; i++)
 		odph_odpthreads_join(&thread_tbl[i]);
+
+	for (i = 0; i < args->if_count; ++i) {
+		struct l3fwd_pktio_s *port;
+
+		port = &global.l3fwd_pktios[i];
+
+		ret   = odp_pktio_stop(port->pktio);
+		if (ret) {
+			printf("Error: unable to stop %s\n",
+			       args->if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+
+		ret   = odp_pktio_close(port->pktio);
+		if (ret) {
+			printf("Error: unable to close %s\n",
+			       args->if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+	}
 
 	/* if_names share a single buffer, so only one free */
 	free(args->if_names[0]);

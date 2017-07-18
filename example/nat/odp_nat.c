@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <arpa/inet.h>
 
 #include <odp_api.h>
@@ -277,6 +278,7 @@ typedef struct ODP_PACKED {
 } odph_dsa_ethhdr_t;
 
 static int exit_threads;	/**< Break workers loop if set to 1 */
+static int glb_stop;
 
 /** Global pointer to args */
 static args_t *gbl_args;
@@ -1652,7 +1654,7 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 		}
 
 		elapsed += timeout;
-	} while (loop_forever || (elapsed < duration));
+	} while (!glb_stop && (loop_forever || (elapsed < duration)));
 
 	if (stats_enabled)
 		printf("TEST RESULT: %" PRIu64 " maximum packets per second.\n",
@@ -2208,6 +2210,14 @@ static void gbl_args_init(args_t *args)
 	odp_rwlock_init(&args->dnat_lock);
 }
 
+static void sig_int_handler(int sig)
+{
+	if (sig == SIGINT) {
+		glb_stop = 1;
+		exit_threads = 1;
+	}
+}
+
 /**
  * ODP NAT main function
  */
@@ -2239,6 +2249,11 @@ int main(int argc, char *argv[])
 
 	odp_init_params.worker_cpus = &worker_cpu_mask;
 	odp_init_params.control_cpus = &control_cpu_mask;
+
+	if (signal(SIGINT, sig_int_handler) != 0) {
+		printf("Error: register to SIGINT failed\n");
+		exit(EXIT_FAILURE);
+	}
 
 	/* Init ODP before calling anything else */
 	if (odp_init_global(&instance, &odp_init_params, NULL)) {
@@ -2379,11 +2394,34 @@ int main(int argc, char *argv[])
 	for (i = 0; i < num_workers; ++i)
 		odph_odpthreads_join(&thread_tbl[i]);
 
+	for (i = 0; i < if_count; ++i) {
+		odp_pktio_t pktio;
+
+		pktio = gbl_args->pktios[i].pktio;
+		ret   = odp_pktio_stop(pktio);
+		if (ret) {
+			printf("Error: unable to stop %s\n",
+			       gbl_args->appl.if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+		ret   = odp_pktio_close(pktio);
+		if (ret) {
+			printf("Error: unable to close %s\n",
+			       gbl_args->appl.if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+	}
+
 	free(gbl_args->appl.if_names);
 	free(gbl_args->appl.if_str);
 	free(gbl_args->appl.if_wan_str);
 
 	if (odp_pool_destroy(pool)) {
+		printf("Error: pool destroy\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_pool_destroy(pool_tap)) {
 		printf("Error: pool destroy\n");
 		exit(EXIT_FAILURE);
 	}

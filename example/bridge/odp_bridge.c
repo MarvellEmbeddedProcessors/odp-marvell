@@ -29,6 +29,7 @@
 #include <odp/helper/ip.h>
 #include <odp/helper/udp.h>
 #include <odp_packet_internal.h>
+#include <signal.h>
 
 /** @def MAX_WORKERS
  * @brief Maximum number of worker threads
@@ -169,6 +170,7 @@ typedef struct {
 static args_t *gbl_args;
 /** Global barrier to synchronize main and workers */
 static odp_barrier_t barrier;
+static unsigned int glb_stop;
 
 static inline void swap_l2(char *buf)
 {
@@ -233,6 +235,11 @@ static inline int drop_err_pkts(odp_packet_t pkt_tbl[], unsigned num)
 	return dropped;
 }
 
+static void sig_int_handler(int sig)
+{
+	glb_stop = 1;
+	exit_threads = 1;
+}
 
 /**
  * Packet IO worker thread accessing IO resources directly
@@ -520,7 +527,7 @@ static int print_speed_stats(int num_workers, stats_t *thr_stats,
 			pkts_prev = pkts;
 		}
 		elapsed += timeout;
-	} while (loop_forever || (elapsed < duration));
+	} while (!glb_stop && (loop_forever || (elapsed < duration)));
 
 	if (stats_enabled)
 		printf("TEST RESULT: %" PRIu64 " maximum packets per second.\n",
@@ -929,6 +936,11 @@ int main(int argc, char *argv[])
 	odp_init_params.worker_cpus = &worker_cpu_mask;
 	odp_init_params.control_cpus = &control_cpu_mask;
 
+	if (signal(SIGINT, sig_int_handler) != 0) {
+		printf("Error: register to SIGINT failed\n");
+		exit(EXIT_FAILURE);
+	}
+
 	/* Init ODP before calling anything else */
 	if (odp_init_global(&instance, &odp_init_params, NULL)) {
 		printf("Error: ODP global init failed.\n");
@@ -1064,6 +1076,25 @@ int main(int argc, char *argv[])
 	/* Master thread waits for other threads to exit */
 	for (i = 0; i < num_workers; ++i)
 		odph_odpthreads_join(&thread_tbl[i]);
+
+	for (i = 0; i < if_count; ++i) {
+		odp_pktio_t pktio;
+
+		pktio = gbl_args->pktios[i].pktio;
+		ret   = odp_pktio_stop(pktio);
+		if (ret) {
+			printf("Error: unable to stop %s\n",
+			       gbl_args->appl.if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+
+		ret   = odp_pktio_close(pktio);
+		if (ret) {
+			printf("Error: unable to close %s\n",
+			       gbl_args->appl.if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+	}
 
 	free(gbl_args->appl.if_names);
 	free(gbl_args->appl.if_str);
