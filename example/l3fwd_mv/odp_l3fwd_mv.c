@@ -27,7 +27,7 @@
 #include "ezxml.h"
 
 
-#define POOL_NUM_PKT	1024 /* 8192 */
+#define POOL_NUM_PKT	1536 /* 8192 */
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	64
 
