@@ -733,6 +733,7 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 	int				i, j, err;
 	struct pp2_ppio_params		port_params;
 	struct pp2_ppio_inq_params	inq_params[MVPP2_MAX_NUM_QS_PER_TC];
+	struct pp2_ppio_tc_params	*tcs_params;
 
 	if (!pktio_entry->s.num_in_queue && !pktio_entry->s.num_out_queue) {
 		ODP_ERR("No input and output queues configured!\n");
@@ -759,13 +760,14 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 
 		port_params.inqs_params.num_tcs = MVPP2_MAX_NUM_TCS_PER_PORT;
 		for (i = 0; i < port_params.inqs_params.num_tcs; i++) {
-			port_params.inqs_params.tcs_params[i].pkt_offset = MVPP2_PACKET_OFFSET >> 2;
-			port_params.inqs_params.tcs_params[i].num_in_qs = pktio_entry->s.num_in_queue;
+			tcs_params = &port_params.inqs_params.tcs_params[i];
+			tcs_params->pkt_offset = MVPP2_PACKET_OFFSET;
+			tcs_params->num_in_qs = pktio_entry->s.num_in_queue;
 			memset(inq_params, 0, sizeof(inq_params));
-			for (j = 0; j < port_params.inqs_params.tcs_params[i].num_in_qs; j++)
+			for (j = 0; j < tcs_params->num_in_qs; j++)
 				inq_params[j].size = MVPP2_RXQ_SIZE;
-			port_params.inqs_params.tcs_params[i].inqs_params = inq_params;
-			port_params.inqs_params.tcs_params[i].pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
+			tcs_params->inqs_params = inq_params;
+			tcs_params->pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
 		}
 		port_params.outqs_params.num_outqs = MVPP2_MAX_NUM_TCS_PER_PORT;
 		for (i = 0; i < port_params.outqs_params.num_outqs; i++) {
