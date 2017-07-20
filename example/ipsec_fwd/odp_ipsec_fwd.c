@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <inttypes.h>
 #include <signal.h>
+#include <errno.h>
 
 #include <example_debug.h>
 
@@ -61,7 +62,9 @@
 #define dprintf(fmt...)
 #endif
 
-/*#define IPSEC_DEBUG_SIG*/
+static void sig_int(int sig);
+static int exit_threads;
+
 #ifdef IPSEC_DEBUG_SIG
 #define DBG_ODP_APP    0x1
 #define DBG_ODP_CRYPTO 0x2
@@ -104,6 +107,9 @@ static void sig_usr(int sig);
 #define MAX_NB_QUEUE	2
 
 #define MAX_CRYPTO_TO_CPU_PKT_THREASHOULD 256
+
+#define CRYPTO_CLEAN_RING_REP      20
+#define CRYPTO_CLEAN_TIME_OUT_MSEC 50
 
 #define CHECK_RC(rc,ctx,pkt_tbl,i,j)  if(rc==PKT_DROP){free_pkt_ctx(ctx[i]);odp_packet_free(pkt_tbl[i]);continue;}
 //#define CHECK_RC(rc,ctx,pkt_tbl,i,j)  if((rc!=PKT_CONTINUE)&&(rc!=PKT_POSTED)){printf("NOT CONTINUE!!! rc=%d i=%d j=%d\n",rc,i,j);}
@@ -1557,6 +1563,9 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	int num_pktio = 0;
 	int empty_rx_counters = 0;
 	int worker_id = WORKER_ID_GET();
+	int i, pkt_idx;
+	odp_crypto_op_result_t result;
+	odp_event_t	crypto_events[MAX_PKT_BURST];
 
 	ctx_buf_mng_init();
 
@@ -1575,7 +1584,7 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	odp_barrier_wait(&sync_barrier);
 
 	/* Loop packets */
-	for (;;) {
+	do {
 		++rx_port;
 		rx_port = rx_port % num_pktio;
 
@@ -1596,9 +1605,56 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 		network_rx_handler(pkt_tbl, pkts);
 
 		crypto_rx_handler(worker_id);
+	} while (!exit_threads);
+
+	for (i = 0 ; i < CRYPTO_CLEAN_RING_REP ; i++) {
+		int crypto_pkts;
+		int worker_id = WORKER_ID_GET();
+
+		odp_crypto_operation(NULL, NULL, NULL);
+		usleep(CRYPTO_CLEAN_TIME_OUT_MSEC * 1000);
+		crypto_pkts = odp_queue_deq_multi(
+			completionq[CRYPTO_QUEUE_INBOUND_INDEX][worker_id],
+			crypto_events,
+			MAX_PKT_BURST);
+
+		if (crypto_pkts > 0) {
+			for (pkt_idx = 0; pkt_idx < crypto_pkts; pkt_idx++) {
+				odp_crypto_compl_t compl;
+
+				compl = odp_crypto_compl_from_event(
+							crypto_events[pkt_idx]);
+				odp_crypto_compl_result(compl, &result);
+				odp_crypto_compl_free(compl);
+				odp_packet_free(result.pkt);
+			}
+		}
+
+		crypto_pkts = odp_queue_deq_multi(
+			completionq[CRYPTO_QUEUE_OUTBOUND_INDEX][worker_id],
+			crypto_events,
+			MAX_PKT_BURST);
+
+		if (crypto_pkts > 0) {
+			for (pkt_idx = 0; pkt_idx < crypto_pkts; pkt_idx++) {
+				odp_crypto_compl_t compl;
+
+				compl = odp_crypto_compl_from_event(
+							crypto_events[pkt_idx]);
+				odp_crypto_compl_result(compl, &result);
+				odp_crypto_compl_free(compl);
+				odp_packet_free(result.pkt);
+			}
+		}
 	}
 
-	/* unreachable */
+	for (i = 0; i < MAX_CTX_DB / 2; i++) {
+		odp_buffer_t ctx_buf;
+
+		ctx_buf = ctx_buf_mng_db[worker_id][i];
+		odp_buffer_free(ctx_buf);
+	}
+
 	return 0;
 }
 
@@ -1832,6 +1888,42 @@ static void usage(char *progname)
 		);
 }
 
+/**
+ * ODP ipsec deinit function
+ */
+static void ipsec_deinit(void)
+{
+	int i, ret;
+
+	for (i = 0; i < args->appl.if_count; ++i) {
+		odp_pktio_t pktio;
+
+		pktio = port_io_config[i].pktio;
+		ret   = odp_pktio_stop(pktio);
+		if (ret) {
+			printf("Error: unable to stop %s\n",
+			       args->appl.if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+
+		ret   = odp_pktio_close(pktio);
+		if (ret) {
+			printf("Error: unable to close %s\n",
+			       args->appl.if_names[i]);
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	for (i = 0; i < MAX_WORKERS; i++) {
+		odp_queue_t odp_queue;
+
+		odp_queue = completionq[CRYPTO_QUEUE_OUTBOUND_INDEX][i];
+		odp_queue_destroy(odp_queue);
+
+		odp_queue = completionq[CRYPTO_QUEUE_INBOUND_INDEX][i];
+		odp_queue_destroy(odp_queue);
+	}
+}
 
 /**
  * ODP ipsec example main function
@@ -1854,10 +1946,24 @@ main(int argc, char *argv[])
 	schedule = odp_schedule_cb;
 #ifdef IPSEC_DEBUG_SIG
 	if(signal(SIGUSR1, sig_usr) != 0)
-		printf("error while register to SIGUSR1\n");
+		printf("error while register to SIGUSR1. %s\n",
+		       strerror(errno));
 	if(signal(SIGUSR2, sig_usr) != 0)
-		printf("error while register to SIGUSR2\n");
+		printf("error while register to SIGUSR2. %s\n",
+		       strerror(errno));
 #endif
+
+	if (signal(SIGINT, sig_int) != 0) {
+		printf("error while register to SIGINT. %s\n",
+		       strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	if (signal(SIGTERM, sig_int) != 0) {
+		printf("error while register to SIGTERM. %s\n",
+		       strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
 	/* check for using poll queues */
 	if (getenv("ODP_IPSEC_USE_POLL_QUEUES")) {
@@ -1992,18 +2098,53 @@ main(int argc, char *argv[])
 		odph_odpthreads_join(thread_tbl);
 	}
 
+	ipsec_deinit();
+
 	free(args->appl.if_names);
 	free(args->appl.if_str);
+
+	if (odp_pool_destroy(ctx_pool)) {
+		printf("Error: context pool destroy\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_pool_destroy(out_pool)) {
+		printf("Error: output pool destroy\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_pool_destroy(pkt_pool)) {
+		printf("Error: packet pool destroy\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_term_local()) {
+		printf("Error: term local\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_term_global(instance)) {
+		printf("Error: term global\n");
+		exit(EXIT_FAILURE);
+	}
+
 	printf("Exit\n\n");
 
 	return 0;
 }
+
+static void sig_int(int sig)
+{
+	if (sig == SIGINT || sig == SIGTERM)
+		exit_threads = 1;
+}
+
 #ifdef IPSEC_DEBUG_SIG
 static void sig_usr(int sig)
 {
 	unsigned int tmp;
-	tmp = debug_flag;
 
+	tmp = debug_flag;
 	switch(sig) {
 	case SIGUSR1:
 		tmp &= ~DBG_ODP_APP;
