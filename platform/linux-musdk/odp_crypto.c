@@ -564,6 +564,10 @@ static int mvsam_odp_crypto_init_global(void)
 static int mvsam_odp_crypto_term_global(void)
 {
 	unsigned int i, cio_local_idx;
+
+	for (i = 0 ; i < num_session ; i++)
+		sam_session_destroy(sessions[i].sa);
+
 	for(i = 0 ; i < MAX_NUM_OF_THREADS ; i++) {
 		for(cio_local_idx = 0 ; cio_local_idx < sam_num_inst ; cio_local_idx++)
 			sam_cio_deinit(crp_thread[i].cio[cio_local_idx].cio_hw);
