@@ -223,15 +223,15 @@ static inline void netmap_close_descriptors(pktio_entry_t *pktio_entry)
 
 	for (i = 0; i < PKTIO_MAX_QUEUES; i++) {
 		for (j = 0; j < NM_MAX_DESC; j++) {
-			if (pkt_nm->rx_desc_ring[i].s.desc[j] != NULL) {
-				nm_close(pkt_nm->rx_desc_ring[i].s.desc[j]);
-				pkt_nm->rx_desc_ring[i].s.desc[j] = NULL;
-			}
-		}
-		for (j = 0; j < NM_MAX_DESC; j++) {
 			if (pkt_nm->tx_desc_ring[i].s.desc[j] != NULL) {
 				nm_close(pkt_nm->tx_desc_ring[i].s.desc[j]);
 				pkt_nm->tx_desc_ring[i].s.desc[j] = NULL;
+			}
+		}
+		for (j = 0; j < NM_MAX_DESC; j++) {
+			if (pkt_nm->rx_desc_ring[i].s.desc[j] != NULL) {
+				nm_close(pkt_nm->rx_desc_ring[i].s.desc[j]);
+				pkt_nm->rx_desc_ring[i].s.desc[j] = NULL;
 			}
 		}
 	}
