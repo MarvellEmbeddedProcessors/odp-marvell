@@ -1227,7 +1227,7 @@ static int print_speed_stats(int num_workers, int duration, int timeout)
 
 static void sig_int_handler(int sig)
 {
-	if (sig == SIGINT) {
+	if (sig == SIGINT || sig == SIGTERM) {
 		glb_stop = 1;
 		exit_threads = 1;
 	}
@@ -1255,6 +1255,11 @@ int main(int argc, char **argv)
 
 	if (signal(SIGINT, sig_int_handler) != 0) {
 		printf("Error: register to SIGINT failed\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (signal(SIGTERM, sig_int_handler) != 0) {
+		printf("Error: register to SIGTERM failed\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1448,6 +1453,8 @@ int main(int argc, char **argv)
 	for (i = 0; i < nb_worker; i++)
 		odph_odpthreads_join(&thread_tbl[i]);
 
+	/* TODO: remove this delay after handling shadow free by pktio */
+	sleep(1);
 	for (i = 0; i < args->if_count; ++i) {
 		struct l3fwd_pktio_s *port;
 
