@@ -2471,7 +2471,7 @@ static void gbl_args_init(args_t *args)
 
 static void sig_int_handler(int sig)
 {
-	if (sig == SIGINT) {
+	if (sig == SIGINT || sig == SIGTERM) {
 		glb_stop = 1;
 		exit_threads = 1;
 	}
@@ -2511,6 +2511,11 @@ int main(int argc, char *argv[])
 
 	if (signal(SIGINT, sig_int_handler) != 0) {
 		printf("Error: register to SIGINT failed\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (signal(SIGTERM, sig_int_handler) != 0) {
+		printf("Error: register to SIGTERM failed\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -2647,12 +2652,12 @@ int main(int argc, char *argv[])
 	ret = nat_aging_and_stats(num_workers, stats, gbl_args->appl.time,
 				gbl_args->appl.accuracy, ODP_NAT_AGING_ENABLE);
 
-	exit_threads = 1;
-
 	/* Master thread waits for other threads to exit */
 	for (i = 0; i < num_workers; ++i)
 		odph_odpthreads_join(&thread_tbl[i]);
 
+	/* TODO: remove this delay after handling shadow free by pktio */
+	sleep(1);
 	for (i = 0; i < if_count; ++i) {
 		odp_pktio_t pktio;
 

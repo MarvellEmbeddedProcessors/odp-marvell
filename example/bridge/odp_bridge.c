@@ -237,8 +237,10 @@ static inline int drop_err_pkts(odp_packet_t pkt_tbl[], unsigned num)
 
 static void sig_int_handler(int sig)
 {
-	glb_stop = 1;
-	exit_threads = 1;
+	if (sig == SIGINT || sig == SIGTERM) {
+		glb_stop = 1;
+		exit_threads = 1;
+	}
 }
 
 /**
@@ -941,6 +943,11 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
+	if (signal(SIGTERM, sig_int_handler) != 0) {
+		printf("Error: register to SIGTERM failed\n");
+		exit(EXIT_FAILURE);
+	}
+
 	/* Init ODP before calling anything else */
 	if (odp_init_global(&instance, &odp_init_params, NULL)) {
 		printf("Error: ODP global init failed.\n");
@@ -1071,12 +1078,12 @@ int main(int argc, char *argv[])
 	ret = print_speed_stats(num_workers, stats, gbl_args->appl.time,
 				gbl_args->appl.accuracy);
 
-	exit_threads = 1;
-
 	/* Master thread waits for other threads to exit */
 	for (i = 0; i < num_workers; ++i)
 		odph_odpthreads_join(&thread_tbl[i]);
 
+	/* TODO: remove this delay after handling shadow free by pktio */
+	sleep(1);
 	for (i = 0; i < if_count; ++i) {
 		odp_pktio_t pktio;
 
