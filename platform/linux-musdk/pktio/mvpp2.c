@@ -1178,7 +1178,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 
 	shadow_q_free_size = SHADOW_Q_MAX_SIZE - shadow_q->size - 1;
 	if (odp_unlikely(num_pkts >= shadow_q_free_size)) {
-		ODP_ERR("No room in shadow queue for %d packets!!! %d packets will be sent.\n",
+		ODP_DBG("No room in shadow queue for %d packets!!! %d packets will be sent.\n",
 			num_pkts, shadow_q_free_size);
 		num_pkts = shadow_q_free_size;
 	}
