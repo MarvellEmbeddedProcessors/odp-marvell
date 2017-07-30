@@ -1167,7 +1167,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	dma_addr_t		 pa;
 	u16			 i, num, len, idx = 0;
 	u8			 tc;
-	int			 err, sent = 0;
+	int			 sent = 0;
 	pkt_mvpp2_t		*pkt_mvpp2 = &pktio_entry->s.pkt_mvpp2;
 	pktio_entry_t 		*input_entry;
 	struct odp_pktio_config_t *config = &pktio_entry->s.config;
@@ -1191,7 +1191,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 						tc);
 
 	shadow_q_free_size = SHADOW_Q_MAX_SIZE - shadow_q->size - 1;
-	if (odp_unlikely(num_pkts >= shadow_q_free_size)) {
+	if (odp_unlikely(num_pkts > shadow_q_free_size)) {
 		ODP_DBG("No room in shadow queue for %d packets!!! %d packets will be sent.\n",
 			num_pkts, shadow_q_free_size);
 		num_pkts = shadow_q_free_size;
@@ -1278,17 +1278,35 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		idx++;
 		if (odp_unlikely(idx == MVPP2_MAX_TX_BURST_SIZE)) {
 			num = idx;
-			err = pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &num);
+			pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &num);
 			sent += num;
-			/* TODO - in case not all frames were send we need to decrease the write_ind */
-			if ((idx != num) || (err != 0))
+			/* In case not all frames were send we need to decrease
+			 * the write_ind
+			 */
+			if (odp_unlikely(idx != num)) {
+				idx -= num;
+				shadow_q->write_ind =
+						(SHADOW_Q_MAX_SIZE +
+						shadow_q->write_ind - idx) &
+						SHADOW_Q_MAX_SIZE_MASK;
+				shadow_q->size -= idx;
 				return sent;
+			}
 			idx = 0;
 		}
 	}
-	err = pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &idx);
-	/* TODO - in case not all frames were send we need to decrease the write_ind */
-	sent += idx;
+	num = idx;
+	pp2_ppio_send(pkt_mvpp2->ppio, hif, tc, descs, &num);
+	sent += num;
+
+	/* In case not all frames were send we need to decrease the write_ind */
+	if (odp_unlikely(idx != num)) {
+		idx -= num;
+		shadow_q->write_ind =
+			(SHADOW_Q_MAX_SIZE + shadow_q->write_ind - idx) &
+			SHADOW_Q_MAX_SIZE_MASK;
+		shadow_q->size -= idx;
+	}
 
 	return sent;
 }
