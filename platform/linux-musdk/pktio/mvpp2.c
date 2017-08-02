@@ -203,8 +203,8 @@ static void release_bpool(int bpool)
 }
 
 #ifndef USE_HW_BUFF_RECYLCE
-static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif *hif,
-					   struct tx_shadow_q *shadow_q, u8 tc, int force)
+static inline void mvpp2_free_sent_buffers(struct pp2_hif *hif,
+					   struct tx_shadow_q *shadow_q)
 {
 	struct buff_release_entry *entry;
 	odp_packet_t pkt;
@@ -212,13 +212,6 @@ static inline void mvpp2_free_sent_buffers(struct pp2_ppio *ppio, struct pp2_hif
 #ifdef USE_LPBK_SW_RECYLCE
 	u16 num_bufs = 0, skip_bufs = 0;
 #endif
-
-	pp2_ppio_get_num_outq_done(ppio, hif, tc, &num_conf);
-
-	shadow_q->num_to_release += num_conf;
-
-	if (odp_likely(!force && (shadow_q->num_to_release < BUFFER_RELEASE_BURST_SIZE)))
-		return;
 
 	num_conf = shadow_q->num_to_release;
 	shadow_q->num_to_release = 0;
@@ -283,6 +276,24 @@ skip_buf:
 	}
 #endif /* USE_LPBK_SW_RECYLCE */
 }
+
+static inline void mvpp2_check_n_free_sent_buffers(struct pp2_ppio *ppio,
+						   struct pp2_hif *hif,
+						   struct tx_shadow_q *shadow_q,
+						   u8 tc)
+{
+	u16 num_conf = 0;
+
+	pp2_ppio_get_num_outq_done(ppio, hif, tc, &num_conf);
+
+	shadow_q->num_to_release += num_conf;
+
+	if (odp_likely(shadow_q->num_to_release < BUFFER_RELEASE_BURST_SIZE))
+		return;
+
+	mvpp2_free_sent_buffers(hif, shadow_q);
+}
+
 #endif /* USE_HW_BUFF_RECYLCE */
 
 static int mvpp2_sysfs_param_get(char *file)
@@ -706,14 +717,14 @@ static int mvpp2_close(pktio_entry_t *pktio_entry)
 {
 	int i, tc = 0;
 	struct pp2_hif *hif = thds[get_thr_id()].hif;
+	struct tx_shadow_q *shadow_q;
 
 	if (pktio_entry->s.pkt_mvpp2.ppio) {
-		for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++)
-			mvpp2_free_sent_buffers(pktio_entry->s.pkt_mvpp2.ppio,
-						hif,
-						&pktio_entry->s.pkt_mvpp2.shadow_qs[i][tc],
-						tc,
-						true);
+		for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++) {
+			shadow_q = &pktio_entry->s.pkt_mvpp2.shadow_qs[i][tc];
+			shadow_q->num_to_release = shadow_q->size;
+			mvpp2_free_sent_buffers(hif, shadow_q);
+		}
 
 		/* Deinit the PP2 port */
 		pp2_ppio_deinit(pktio_entry->s.pkt_mvpp2.ppio);
@@ -1174,7 +1185,10 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 #ifndef USE_HW_BUFF_RECYLCE
 	shadow_q = &pkt_mvpp2->shadow_qs[get_thr_id()][tc];
 	if (shadow_q->size)
-		mvpp2_free_sent_buffers(pkt_mvpp2->ppio, hif, shadow_q, tc, false);
+		mvpp2_check_n_free_sent_buffers(pkt_mvpp2->ppio,
+						hif,
+						shadow_q,
+						tc);
 
 	shadow_q_free_size = SHADOW_Q_MAX_SIZE - shadow_q->size - 1;
 	if (odp_unlikely(num_pkts >= shadow_q_free_size)) {
