@@ -86,6 +86,8 @@
 #define MAX_AGING_TIME		3600
 
 #define DSA_CPU_CODE		0x2
+#define MV_DSA_MODE_BIT		(0x1ULL << 62)
+#define MV_EXT_DSA_MODE_BIT	(0x1ULL << 63)
 
 /** Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
@@ -1509,6 +1511,15 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	config.pktin.bit.drop_ipv4_err = 0;
 	config.pktin.bit.drop_udp_err = 0;
 	config.pktin.bit.drop_tcp_err = 0;
+
+	/* Configure DSA mode
+	* Marvell proprietary. Use one of the two upper bits in
+	* odp_pktout_queue_param_t struct (not in use by ODP)
+	* to indicate MUSDK pktio that DSA awareness should be turned on
+	*/
+	if (gbl_args->appl.dsa_mode &&
+	    (capa.config.pktout.all_bits & MV_EXT_DSA_MODE_BIT))
+		config.pktout.all_bits |= (uint64_t)MV_EXT_DSA_MODE_BIT;
 
 	odp_pktio_config(pktio, &config);
 

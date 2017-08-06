@@ -42,6 +42,9 @@
 #define PP2_MAX_BUF_STR_LEN		256
 #define MAX_BUFFER_GET_RETRIES		10000
 
+#define MV_DSA_MODE_BIT			(0x1ULL << 62)
+#define MV_EXT_DSA_MODE_BIT		(0x1ULL << 63)
+
 #define upper_32_bits(n) ((u32)(((n) >> 16) >> 16))
 #define lower_32_bits(n) ((u32)(n))
 
@@ -606,6 +609,14 @@ static void init_capability(pktio_entry_t *pktio_entry)
 	* if so, in SW need to identify it by looking at ip-protocol.
 	* capa->config.pktin.bit.drop_sctp_err = 1;
 	*/
+
+	/* DSA mode capability
+	* Marvell proprietary. Use upper two bits in odp_pktout_queue_param_t
+	* (not in use by ODP) to indicate MUSDK pktio DSA awareness capability
+	*/
+	capa->config.pktout.all_bits |= (uint64_t)MV_DSA_MODE_BIT;
+	capa->config.pktout.all_bits |= (uint64_t)MV_EXT_DSA_MODE_BIT;
+
 }
 
 static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
@@ -745,6 +756,7 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 	struct pp2_ppio_params		port_params;
 	struct pp2_ppio_inq_params	inq_params[MVPP2_MAX_NUM_QS_PER_TC];
 	struct pp2_ppio_tc_params	*tcs_params;
+	struct odp_pktio_config_t *config = &pktio_entry->s.config;
 
 	if (!pktio_entry->s.num_in_queue && !pktio_entry->s.num_out_queue) {
 		ODP_ERR("No input and output queues configured!\n");
@@ -765,8 +777,19 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 		port_params.match = name;
 		port_params.type = PP2_PPIO_T_NIC;
 		port_params.maintain_stats = true;
+		if (config->pktout.all_bits & MV_DSA_MODE_BIT)
+			port_params.eth_start_hdr = PP2_PPIO_HDR_ETH_DSA;
+		else if (config->pktout.all_bits & MV_EXT_DSA_MODE_BIT)
+			port_params.eth_start_hdr = PP2_PPIO_HDR_ETH_EXT_DSA;
+		else
+			port_params.eth_start_hdr = PP2_PPIO_HDR_ETH;
 
-		port_params.inqs_params.hash_type = pktio_entry->s.pkt_mvpp2.hash_type;
+		port_params.inqs_params.hash_type =
+				pktio_entry->s.pkt_mvpp2.hash_type;
+
+		ODP_DBG("config.pktio %lx, eth_start_hdr %d\n",
+			config->pktout.all_bits,
+			port_params.eth_start_hdr);
 		ODP_DBG("hash_type %d\n", port_params.inqs_params.hash_type);
 
 		port_params.inqs_params.num_tcs = MVPP2_MAX_NUM_TCS_PER_PORT;
