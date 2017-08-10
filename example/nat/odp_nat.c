@@ -81,7 +81,7 @@
 
 #define MAX_STRING		32
 
-#define ODP_NAT_AGING_ENABLE	0
+#define ODP_NAT_AGING_ENABLE	1
 #define DEFAULT_AGING_TIME	300
 #define MAX_AGING_TIME		3600
 
@@ -1575,21 +1575,102 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	return 0;
 }
 
+static uint64_t print_stats(int num_workers, stats_t *thr_stats, int timeout,
+			    uint64_t *pkts_prev, uint64_t *maximum_pps)
+{
+	uint64_t rx_drops = 0;
+	uint64_t tx_drops = 0;
+	uint64_t pkts = 0;
+	uint64_t pps;
+	int i;
+
+	for (i = 0; i < num_workers; i++) {
+		pkts += thr_stats[i].s.packets;
+		rx_drops += thr_stats[i].s.rx_drops;
+		tx_drops += thr_stats[i].s.tx_drops;
+	}
+
+	pps = (pkts - *pkts_prev) / timeout;
+	if (pps > *maximum_pps)
+		*maximum_pps = pps;
+
+	printf("%" PRIu64 " pps, %" PRIu64 " max pps, ",  pps, *maximum_pps);
+	printf(" %" PRIu64 " rx drops, %" PRIu64 " tx drops\n", rx_drops,
+	       tx_drops);
+
+	*pkts_prev = pkts;
+	return pkts;
+}
+
+static inline void clear_nat_entry(int index, int depth)
+{
+	gbl_args->snat_tbl[index][depth].reverse_nat_entry->valid = 0;
+	gbl_args->snat_tbl[index][depth].valid = 0;
+}
+
+static inline void aging_hash_entry_scan(int idx, uint32_t counter_update)
+{
+	int j;
+
+	for (j = 0; j < NAT_TBL_DEPTH; j++) {
+		odp_rwlock_write_lock(&gbl_args->snat_lock);
+		if (gbl_args->snat_tbl[idx][j].valid) {
+			gbl_args->snat_tbl[idx][j].counter += counter_update;
+			/* snat_tbl[i][j].reverse_nat_entry->counter +=
+			  timeout; */
+			if (odp_unlikely(gbl_args->snat_tbl[idx][j].counter >=
+						gbl_args->appl.aging_time)) {
+				clear_nat_entry(idx, j);
+			}
+		}
+		odp_rwlock_write_unlock(&gbl_args->snat_lock);
+	}
+}
+
 static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
-	     int duration, int timeout, int aging_enable)
+			       int duration, int timeout, int aging_enable)
 {
 	uint64_t pkts = 0;
-	uint64_t pkts_prev = 0;
-	uint64_t pps;
-	uint64_t rx_drops, tx_drops;
 	uint64_t maximum_pps = 0;
-	int i, j;
+	uint64_t pkts_prev = 0;
+	int i;
 	int elapsed = 0;
 	int stats_enabled = 1;
 	int loop_forever = (duration == 0);
 	int dump_interval = 20;
+	int cur_chunk = 0;
+	uint16_t num_chunks = 512;
+	uint16_t chunk_size = NAT_TBL_SIZE / num_chunks;
+	int aging_start_idx;
+	int aging_end_idx;
+	int passed_usec = 0;
+	int sleep_usec = 50;
+	struct timespec time1, time2;
+	int counter = 0;
 
-	if(dump_interval <= 0 )
+	if ((num_chunks * sleep_usec / 1000) > (int)gbl_args->appl.aging_time) {
+		num_chunks = gbl_args->appl.aging_time * 1000 / sleep_usec;
+
+		/* num_chunks should be a power of 2 and smaller than the
+			current value */
+		while (num_chunks >>= 1)
+			counter++;
+
+		if (counter > 0)
+			counter--;
+
+		num_chunks = 2 << counter;
+	}
+
+	time1.tv_sec = 0;
+	time1.tv_nsec = sleep_usec * 1000000L;
+
+	if (NAT_TBL_SIZE % num_chunks != 0) {
+		printf("Error: invalid number of aging scan chunks\n");
+		return -1;
+	}
+
+	if (dump_interval <= 0)
 		dump_interval = 1;
 
 	if (timeout <= 0) {
@@ -1602,58 +1683,53 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 	odp_barrier_wait(&barrier);
 
 	do {
-		sleep(timeout);
-		if(aging_enable)
-		{
-			for(i=0; i<NAT_TBL_SIZE; i++)
-			{
-				for(j=0; j<NAT_TBL_DEPTH; j++)
-				{
-					odp_rwlock_write_lock(&gbl_args->snat_lock);
-					if(gbl_args->snat_tbl[i][j].valid)
-					{
-						gbl_args->snat_tbl[i][j].counter += timeout;
-						//gbl_args->snat_tbl[i][j].reverse_nat_entry->counter += timeout;
-						if (odp_unlikely(gbl_args->snat_tbl[i][j].counter >= gbl_args->appl.aging_time))
-						{
-							gbl_args->snat_tbl[i][j].reverse_nat_entry->valid = 0;
-							gbl_args->snat_tbl[i][j].valid = 0;
-						}
-					}
-					odp_rwlock_write_unlock(&gbl_args->snat_lock);
-				}
+		if (aging_enable) {
+			aging_start_idx = cur_chunk * chunk_size;
+			aging_end_idx = aging_start_idx + chunk_size;
+
+			for (i = aging_start_idx; i < aging_end_idx; i++) {
+				aging_hash_entry_scan(i, num_chunks *
+						      sleep_usec / 1000);
 			}
-			if (odp_unlikely((gbl_args->appl.print_table == 1) && (elapsed % dump_interval == 0)))
-			{
-				print_nat_table(gbl_args->snat_tbl, NAT_TBL_SIZE, NAT_TBL_DEPTH, "SNAT Table Dump");
-				print_nat_table(gbl_args->dnat_tbl, NAT_TBL_SIZE, NAT_TBL_DEPTH, "DNAT Table Dump");
+
+			if (odp_unlikely(++cur_chunk == num_chunks))
+				cur_chunk = 0;
+
+			nanosleep(&time1, &time2);
+			passed_usec += sleep_usec;
+
+			if (odp_unlikely(passed_usec >= timeout * 1000)) {
+				passed_usec = 0;
+				elapsed += timeout;
+
+				if (stats_enabled)
+					pkts = print_stats(num_workers,
+							   thr_stats,
+							   timeout,
+							   &pkts_prev,
+							   &maximum_pps);
 			}
+
+			if (odp_unlikely((gbl_args->appl.print_table == 1) &&
+					 (elapsed % dump_interval == 0))) {
+				print_nat_table(gbl_args->snat_tbl,
+						NAT_TBL_SIZE, NAT_TBL_DEPTH,
+						"SNAT Table Dump");
+				print_nat_table(gbl_args->dnat_tbl,
+						NAT_TBL_SIZE, NAT_TBL_DEPTH,
+						"DNAT Table Dump");
+			}
+		} else {
+			sleep(timeout);
+
+			if (stats_enabled)
+				pkts = print_stats(num_workers, thr_stats,
+						   timeout, &pkts_prev,
+						   &maximum_pps);
+
+			elapsed += timeout;
 		}
 
-		if (stats_enabled) {
-			pkts = 0;
-			rx_drops = 0;
-			tx_drops = 0;
-
-			for (i = 0; i < num_workers; i++) {
-				pkts += thr_stats[i].s.packets;
-				rx_drops += thr_stats[i].s.rx_drops;
-				tx_drops += thr_stats[i].s.tx_drops;
-			}
-
-			pps = (pkts - pkts_prev) / timeout;
-			if (pps > maximum_pps)
-				maximum_pps = pps;
-			printf("%" PRIu64 " pps, %" PRIu64 " max pps, ",  pps,
-			       maximum_pps);
-
-			printf(" %" PRIu64 " rx drops, %" PRIu64 " tx drops\n",
-			       rx_drops, tx_drops);
-
-			pkts_prev = pkts;
-		}
-
-		elapsed += timeout;
 	} while (!glb_stop && (loop_forever || (elapsed < duration)));
 
 	if (stats_enabled)
