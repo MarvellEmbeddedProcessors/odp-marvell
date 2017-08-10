@@ -1109,6 +1109,55 @@ static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 	return link_up;
 }
 
+#define UNUSED	__attribute__((__unused__))
+
+static inline void parse_l2(odp_packet_hdr_t *pkt_hdr,
+			    struct pp2_ppio_desc *desc UNUSED)
+{
+	pkt_hdr->p.input_flags.eth = 1;
+	pkt_hdr->p.input_flags.l2 = 1;
+	/* TODO - need to signal VLAN and L2 Cast info */
+}
+
+static inline void parse_l3(odp_packet_hdr_t *pkt_hdr,
+			    enum pp2_inq_l3_type type,
+			    u8 offset,
+			    struct pp2_ppio_desc *desc UNUSED)
+{
+	pkt_hdr->p.l3_offset = offset;
+	pkt_hdr->p.input_flags.l3 =
+		(type != PP2_INQ_L3_TYPE_NA);
+	if (odp_likely(type)) {
+		pkt_hdr->p.input_flags.ipv4 =
+			(type <= PP2_INQ_L3_TYPE_IPV4_TTL_ZERO);
+		pkt_hdr->p.input_flags.ipopt =
+			(type == PP2_INQ_L3_TYPE_IPV4_OK);
+		pkt_hdr->p.input_flags.ipv6 =
+			((type == PP2_INQ_L3_TYPE_IPV6_NO_EXT) ||
+			 (type == PP2_INQ_L3_TYPE_IPV6_EXT));
+		pkt_hdr->p.input_flags.arp =
+			(type == PP2_INQ_L3_TYPE_ARP);
+		/* TODO - need to signal L3 Cast info */
+	}
+}
+
+static inline void parse_l4(odp_packet_hdr_t *pkt_hdr,
+			    enum pp2_inq_l4_type type,
+			    u8 offset,
+			    struct pp2_ppio_desc *desc UNUSED)
+{
+	pkt_hdr->p.l4_offset = offset;
+	if (odp_likely(type != PP2_INQ_L4_TYPE_NA)) {
+		pkt_hdr->p.input_flags.l4 = 1;
+		pkt_hdr->p.input_flags.tcp =
+			(type == PP2_INQ_L4_TYPE_TCP);
+		pkt_hdr->p.input_flags.udp =
+			(type == PP2_INQ_L4_TYPE_UDP);
+	} else {
+	/* Need to perform SW parsing */
+	}
+}
+
 static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		      int rxq_id,
 		      odp_packet_t pkt_table[],
@@ -1184,7 +1233,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 				if (odp_unlikely(pktio_entry->s.config.pktin.bit.ipv4_chksum == 0)) {
 					/* Need to parse IPv4. if the error is actually from checksum than need to unset
 					* the error flag. */
-					odp_packet_l3_offset_set(pkt, l3_offset);
+					pkt_hdr->p.l3_offset = l3_offset;
 					if (odp_likely(!odph_ipv4_csum_valid(pkt)))
 						pkt_hdr->p.error_flags.ip_err = 0;
 				}
@@ -1217,24 +1266,13 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			}
 
 			total_got++;
-			/* TODO: set appropriate headroom */
-			packet_parse_l2(&pkt_hdr->p, len);
+			/* Detect jumbo frames */
+			if (len > _ODP_ETH_LEN_MAX)
+				pkt_hdr->p.input_flags.jumbo = 1;
 
-			odp_packet_l3_offset_set(pkt, l3_offset);
-			if (odp_likely(l3_type)) {
-				odp_packet_has_l3_set(pkt, 1);
-				if (l3_type < PP2_INQ_L3_TYPE_IPV4_TTL_ZERO)
-					odp_packet_has_ipv4_set(pkt, 1);
-				else
-					odp_packet_has_ipv6_set(pkt, 1);
-				odp_packet_l4_offset_set(pkt, l4_offset);
-				if (odp_likely(l4_type))
-					odp_packet_has_l4_set(pkt, 1);
-				if (odp_likely(l4_type == PP2_INQ_L4_TYPE_TCP))
-					odp_packet_has_tcp_set(pkt, 1);
-				else if (odp_likely(l4_type == PP2_INQ_L4_TYPE_UDP))
-					odp_packet_has_udp_set(pkt, 1);
-			}
+			parse_l2(pkt_hdr, &descs[i]);
+			parse_l3(pkt_hdr, l3_type, l3_offset, &descs[i]);
+			parse_l4(pkt_hdr, l4_type, l4_offset, &descs[i]);
 		}
 		if (odp_unlikely(qid++ == last_qid))
 			qid = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].first_qid;
