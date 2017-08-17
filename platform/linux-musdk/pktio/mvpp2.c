@@ -998,7 +998,8 @@ static int mvpp2_promisc_mode_set(pktio_entry_t *pktio_entry,  int enable)
 					  pktio_entry->s.name,
 					  enable);
 	} else {
-		err = pp2_ppio_set_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, enable);
+		err = pp2_ppio_set_promisc(pktio_entry->s.pkt_mvpp2.ppio,
+					   enable);
 		if (err)
 			err = -1;
 	}
@@ -1013,7 +1014,8 @@ static int mvpp2_promisc_mode_get(pktio_entry_t *pktio_entry)
 	if (!pktio_entry->s.pkt_mvpp2.ppio) {
 		enable = promisc_mode_get_fd(pktio_entry->s.pkt_mvpp2.sockfd, pktio_entry->s.name);
 	} else {
-		err = pp2_ppio_get_uc_promisc(pktio_entry->s.pkt_mvpp2.ppio, &enable);
+		err = pp2_ppio_get_promisc(pktio_entry->s.pkt_mvpp2.ppio,
+					   &enable);
 		if (err)
 			enable = -1;
 	}
