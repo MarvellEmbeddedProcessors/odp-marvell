@@ -60,7 +60,7 @@ index a6a18c3..8a9a94e 100644
  	memset(&params, 0, sizeof(params));
  	set_pool_len(&params);
 -	params.pkt.num     = PKT_BUF_NUM;
-+	params.pkt.num     = PKT_BUF_NUM * 2;
++	params.pkt.num     = PKT_BUF_NUM * 4;
  	params.type        = ODP_POOL_PACKET;
  
  	snprintf(pool_name, sizeof(pool_name), "pkt_pool_%s_%d",

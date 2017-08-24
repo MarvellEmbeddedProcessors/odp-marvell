@@ -2028,7 +2028,11 @@ main(int argc, char *argv[])
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
-	params.pkt.num     = SHM_PKT_POOL_BUF_COUNT;
+
+	/* Multiply the pool size by factor of 2 since it is shared between
+	 *all the pktio's in the system (ODP_CONFIG_PKTIO_ENTRIES)
+	 */
+	params.pkt.num     = SHM_PKT_POOL_BUF_COUNT * 2;
 	params.type        = ODP_POOL_PACKET;
 
 	pkt_pool = odp_pool_create("packet_pool", &params);
