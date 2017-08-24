@@ -1004,8 +1004,13 @@ int main(int argc, char *argv[])
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
 	if (gbl_args->appl.num_buffers_per_queue == 0)
 		gbl_args->appl.num_buffers_per_queue = SHM_PKT_POOL_SIZE_PER_QUEUE;
-	params.pkt.num     = if_count * (gbl_args->appl.num_buffers_per_queue * num_workers);
-	params.type        = ODP_POOL_PACKET;
+
+	/* Multiply the pool size by factor of 2 since it is shared between
+	 *all the pktio's in the system (ODP_CONFIG_PKTIO_ENTRIES)
+	 */
+	params.pkt.num = (if_count * (gbl_args->appl.num_buffers_per_queue
+				* num_workers)) * 2;
+	params.type = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
 

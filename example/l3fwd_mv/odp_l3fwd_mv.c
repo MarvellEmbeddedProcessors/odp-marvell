@@ -1354,7 +1354,11 @@ int main(int argc, char **argv)
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = POOL_SEG_LEN;
 	params.pkt.len     = POOL_SEG_LEN;
-	params.pkt.num     = POOL_NUM_PKT;
+
+	/* Multiply the pool size by factor of 2 since it is shared between
+	 *all the pktio's in the system (ODP_CONFIG_PKTIO_ENTRIES)
+	 */
+	params.pkt.num     = (POOL_NUM_PKT) * 2;
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
