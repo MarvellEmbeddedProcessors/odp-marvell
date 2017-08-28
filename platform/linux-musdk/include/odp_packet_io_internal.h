@@ -123,6 +123,7 @@ struct pktio_entry {
 						 *   API for IO */
 /* MUSDK - start */
 		pkt_mvpp2_t pkt_mvpp2;		/**< Using MVPP2 API for IO */
+		pkt_mvgiu_t pkt_mvgiu;		/**< Using MVGIU API for IO */
 /* MUSDK - end */
 		pkt_netmap_t pkt_nm;		/**< using netmap API for IO */
 		pkt_dpdk_t pkt_dpdk;		/**< using DPDK for IO */
@@ -270,6 +271,7 @@ int single_send_queue(pktio_entry_t *entry, int index,
 
 /* MUSDK - start */
 extern const pktio_if_ops_t mvpp2_pktio_ops;
+extern const pktio_if_ops_t mvgiu_pktio_ops;
 /* MUSDK - end */
 extern const pktio_if_ops_t netmap_pktio_ops;
 extern const pktio_if_ops_t dpdk_pktio_ops;

@@ -79,6 +79,8 @@ m4_include([platform/linux-musdk/m4/odp_pcap.m4])
 m4_include([platform/linux-musdk/m4/odp_dpdk.m4])
 m4_include([platform/linux-musdk/m4/odp_mvpp2.m4])
 m4_include([platform/linux-musdk/m4/odp_mvsam.m4])
+m4_include([platform/linux-musdk/m4/odp_mvgiu.m4])
+m4_include([platform/linux-musdk/m4/odp_mvnmp.m4])
 m4_include([platform/linux-musdk/m4/odp_ipc.m4])
 m4_include([platform/linux-musdk/m4/odp_schedule.m4])
 

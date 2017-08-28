@@ -237,6 +237,10 @@ if ODP_PKTIO_MVPP2
 __LIB__libodp_linux_la_SOURCES += pktio/mvpp2.c
 endif
 
+if ODP_PKTIO_MVGIU
+__LIB__libodp_linux_la_SOURCES += pktio/mvgiu.c
+endif
+
 if HAVE_PCAP
 __LIB__libodp_linux_la_SOURCES += ../linux-generic/pktio/pcap.c
 endif

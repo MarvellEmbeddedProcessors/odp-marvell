@@ -12,6 +12,10 @@
 
 #include <drivers/mv_pp2_bpool.h>
 #include <drivers/mv_pp2_ppio.h>
+#ifdef ODP_PKTIO_MVGIU
+#include <drivers/mv_giu_bpool.h>
+#include <drivers/mv_giu_gpio.h>
+#endif /* ODP_PKTIO_MVGIU */
 
 #define MAX_NUM_OUTQS_PER_CORE	MVPP2_MAX_NUM_TCS_PER_PORT
 #define SHADOW_Q_MAX_SIZE	MVPP2_TXQ_SIZE	/* Should be power of 2 */
@@ -65,5 +69,18 @@ typedef struct {
 	struct inq_info		inqs[MVPP2_MAX_NUM_QS_PER_TC];
 	enum pp2_ppio_hash_type	hash_type;
 } pkt_mvpp2_t;
+
+typedef struct {
+	uint16_t		 gpio_id;
+	uint16_t		 bpool_id;
+	uint16_t		 mtu;
+
+	/* MVPP2 PP-IO handle */
+	struct giu_gpio		*gpio;
+	/* MVGIU BM Pool handle */
+	struct giu_bpool	*bpool;
+	odp_pool_t		 pool;	/**< pool to alloc packets from */
+	odp_pktio_capability_t	 capa;	/**< interface capabilities */
+} pkt_mvgiu_t;
 
 #endif /* ODP_PACKET_MUSDK_H_ */
