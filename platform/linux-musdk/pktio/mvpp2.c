@@ -1107,53 +1107,133 @@ static int mvpp2_link_status(pktio_entry_t *pktio_entry)
 	return link_up;
 }
 
-#define UNUSED	__attribute__((__unused__))
+static inline uint8_t ipv6_get_next_hdr(const uint8_t *parseptr,
+					uint32_t offset)
+{
+	const _odp_ipv6hdr_t *ipv6 = (const _odp_ipv6hdr_t *)parseptr;
+	const _odp_ipv6hdr_ext_t *ipv6ext;
+
+	/* Skip past IPv6 header */
+	offset   += sizeof(_odp_ipv6hdr_t);
+	parseptr += sizeof(_odp_ipv6hdr_t);
+
+	/* Skip past any IPv6 extension headers */
+	if (ipv6->next_hdr == _ODP_IPPROTO_HOPOPTS ||
+	    ipv6->next_hdr == _ODP_IPPROTO_ROUTE) {
+		do  {
+			ipv6ext = (const _odp_ipv6hdr_ext_t *)parseptr;
+			uint16_t extlen = 8 + ipv6ext->ext_len * 8;
+
+			offset   += extlen;
+			parseptr += extlen;
+		} while ((ipv6ext->next_hdr == _ODP_IPPROTO_HOPOPTS ||
+			  ipv6ext->next_hdr == _ODP_IPPROTO_ROUTE));
+		return ipv6ext->next_hdr;
+	}
+
+	return ipv6->next_hdr;
+}
 
 static inline void parse_l2(odp_packet_hdr_t *pkt_hdr,
-			    struct pp2_ppio_desc *desc UNUSED)
+			    struct pp2_ppio_desc *desc)
 {
+	enum pp2_inq_vlan_tag tag;
+	enum pp2_inq_l2_cast_type cast;
+
 	pkt_hdr->p.input_flags.eth = 1;
 	pkt_hdr->p.input_flags.l2 = 1;
-	/* TODO - need to signal VLAN and L2 Cast info */
+
+	pp2_ppio_inq_desc_get_vlan_tag(desc, &tag);
+	pkt_hdr->p.input_flags.vlan = (tag == PP2_INQ_VLAN_TAG_SINGLE);
+	pkt_hdr->p.input_flags.vlan_qinq = (tag == PP2_INQ_VLAN_TAG_DOUBLE);
+	pp2_ppio_inq_desc_get_l2_cast_info(desc, &cast);
+	pkt_hdr->p.input_flags.eth_mcast = (cast == PP2_INQ_L2_MULTICAST);
+	pkt_hdr->p.input_flags.eth_bcast = (cast == PP2_INQ_L2_BROADCAST);
 }
 
 static inline void parse_l3(odp_packet_hdr_t *pkt_hdr,
 			    enum pp2_inq_l3_type type,
 			    u8 offset,
-			    struct pp2_ppio_desc *desc UNUSED)
+			    struct pp2_ppio_desc *desc)
 {
+	enum pp2_inq_l3_cast_type cast;
+
+	if (odp_unlikely(type == PP2_INQ_L3_TYPE_NA))
+		return;
+
 	pkt_hdr->p.l3_offset = offset;
-	pkt_hdr->p.input_flags.l3 =
-		(type != PP2_INQ_L3_TYPE_NA);
-	if (odp_likely(type)) {
-		pkt_hdr->p.input_flags.ipv4 =
-			(type <= PP2_INQ_L3_TYPE_IPV4_TTL_ZERO);
-		pkt_hdr->p.input_flags.ipopt =
-			(type == PP2_INQ_L3_TYPE_IPV4_OK);
-		pkt_hdr->p.input_flags.ipv6 =
-			((type == PP2_INQ_L3_TYPE_IPV6_NO_EXT) ||
-			 (type == PP2_INQ_L3_TYPE_IPV6_EXT));
-		pkt_hdr->p.input_flags.arp =
-			(type == PP2_INQ_L3_TYPE_ARP);
-		/* TODO - need to signal L3 Cast info */
+	pkt_hdr->p.input_flags.l3 = 1;
+	pkt_hdr->p.input_flags.ipv4 =
+		(type <= PP2_INQ_L3_TYPE_IPV4_TTL_ZERO);
+	pkt_hdr->p.input_flags.ipopt =
+		((type == PP2_INQ_L3_TYPE_IPV4_OK) ||
+		 (type == PP2_INQ_L3_TYPE_IPV6_EXT));
+	pkt_hdr->p.input_flags.ipv6 =
+		((type == PP2_INQ_L3_TYPE_IPV6_NO_EXT) ||
+		 (type == PP2_INQ_L3_TYPE_IPV6_EXT));
+	pkt_hdr->p.input_flags.arp =
+		(type == PP2_INQ_L3_TYPE_ARP);
+	pkt_hdr->p.input_flags.ipfrag = pp2_ppio_inq_desc_get_ip_isfrag(desc);
+
+	pp2_ppio_inq_desc_get_l3_cast_info(desc, &cast);
+	pkt_hdr->p.input_flags.ip_mcast = (cast == PP2_INQ_L3_MULTICAST);
+	pkt_hdr->p.input_flags.ip_bcast = (cast == PP2_INQ_L3_BROADCAST);
+}
+
+static inline void parse_other_l4_protocol(odp_packet_hdr_t *pkt_hdr)
+{
+	uint32_t len;
+	uint8_t proto = _ODP_IPPROTO_INVALID;
+	const uint8_t *ip_frame;
+	const _odp_ipv4hdr_t *ipv4;
+
+	ip_frame = packet_map(pkt_hdr, pkt_hdr->p.l3_offset, &len);
+	if (pkt_hdr->p.input_flags.ipv4) {
+		ipv4 = (const _odp_ipv4hdr_t *)ip_frame;
+		proto = ipv4->proto;
+	} else if (pkt_hdr->p.input_flags.ipv6) {
+		proto = ipv6_get_next_hdr(ip_frame, pkt_hdr->p.l3_offset);
+	}
+
+	/* Parse Layer 4 headers */
+	switch (proto) {
+	case _ODP_IPPROTO_ICMP:
+		pkt_hdr->p.input_flags.icmp = 1;
+		break;
+
+	case _ODP_IPPROTO_AH:
+		pkt_hdr->p.input_flags.ipsec = 1;
+		pkt_hdr->p.input_flags.ipsec_ah = 1;
+		break;
+
+	case _ODP_IPPROTO_ESP:
+		pkt_hdr->p.input_flags.ipsec = 1;
+		pkt_hdr->p.input_flags.ipsec_esp = 1;
+		break;
+
+	case _ODP_IPPROTO_SCTP:
+		pkt_hdr->p.input_flags.sctp = 1;
+		break;
 	}
 }
 
 static inline void parse_l4(odp_packet_hdr_t *pkt_hdr,
 			    enum pp2_inq_l4_type type,
-			    u8 offset,
-			    struct pp2_ppio_desc *desc UNUSED)
+			    u8 offset)
 {
+	if (odp_unlikely(type == PP2_INQ_L4_TYPE_NA))
+		return;
+
 	pkt_hdr->p.l4_offset = offset;
-	if (odp_likely(type != PP2_INQ_L4_TYPE_NA)) {
-		pkt_hdr->p.input_flags.l4 = 1;
+	pkt_hdr->p.input_flags.l4 = 1;
+	if (odp_likely(type != PP2_INQ_L4_TYPE_OTHER)) {
 		pkt_hdr->p.input_flags.tcp =
 			(type == PP2_INQ_L4_TYPE_TCP);
 		pkt_hdr->p.input_flags.udp =
 			(type == PP2_INQ_L4_TYPE_UDP);
-	} else {
-	/* Need to perform SW parsing */
-	}
+	} else
+		/* Need to perform SW parsing */
+		parse_other_l4_protocol(pkt_hdr);
 }
 
 static int mvpp2_recv(pktio_entry_t *pktio_entry,
@@ -1270,7 +1350,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 
 			parse_l2(pkt_hdr, &descs[i]);
 			parse_l3(pkt_hdr, l3_type, l3_offset, &descs[i]);
-			parse_l4(pkt_hdr, l4_type, l4_offset, &descs[i]);
+			parse_l4(pkt_hdr, l4_type, l4_offset);
 		}
 		if (odp_unlikely(qid++ == last_qid))
 			qid = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].first_qid;
