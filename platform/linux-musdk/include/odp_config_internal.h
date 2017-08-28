@@ -13,6 +13,9 @@ extern "C" {
 #endif
 
 /* MUSDK - start */
+/* Take compilation flags from the included musdk_lib */
+#include <env/mv_autogen_comp_flags.h>
+
 /* TODO: MUSDK: get rid of the following lines and make them generic. */
 #define MVPP2_TOTAL_NUM_HIFS	9
 #define MVPP2_TOTAL_NUM_BPOOLS	16
