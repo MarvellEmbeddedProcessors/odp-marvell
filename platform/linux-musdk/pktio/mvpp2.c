@@ -241,7 +241,7 @@ static void release_bpool(int bpool)
 
 #ifndef USE_HW_BUFF_RECYLCE
 static inline void mvpp2_free_sent_buffers(struct pp2_hif *hif,
-					   struct tx_shadow_q *shadow_q)
+					   struct mvpp2_tx_shadow_q *shadow_q)
 {
 	struct buff_release_entry *entry;
 	odp_packet_t pkt;
@@ -321,7 +321,7 @@ skip_buf:
 static inline
 void mvpp2_check_n_free_sent_buffers(struct pp2_ppio *ppio,
 				     struct pp2_hif *hif,
-				     struct tx_shadow_q *shadow_q,
+				     struct mvpp2_tx_shadow_q *shadow_q,
 				     u8 tc)
 {
 	u16 num_conf = 0;
@@ -751,7 +751,7 @@ static int mvpp2_close(pktio_entry_t *pktio_entry)
 {
 	int i, tc = 0;
 	struct pp2_hif *hif = thds[get_thr_id()].hif;
-	struct tx_shadow_q *shadow_q;
+	struct mvpp2_tx_shadow_q *shadow_q;
 
 	if (pktio_entry->s.pkt_mvpp2.ppio) {
 		for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++) {
@@ -1370,7 +1370,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	odp_packet_hdr_t	*pkt_hdr;
 	struct pp2_hif		*hif;
 #ifndef USE_HW_BUFF_RECYLCE
-	struct tx_shadow_q *shadow_q;
+	struct mvpp2_tx_shadow_q *shadow_q;
 	u16			 shadow_q_free_size;
 #endif /* !USE_HW_BUFF_RECYLCE */
 	struct pp2_ppio_desc	 descs[MVPP2_MAX_TX_BURST_SIZE];

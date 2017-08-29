@@ -8,6 +8,8 @@
 #ifndef ODP_PACKET_MUSDK_H_
 #define ODP_PACKET_MUSDK_H_
 
+#include <odp/helper/eth.h>
+
 #include <drivers/mv_pp2_bpool.h>
 #include <drivers/mv_pp2_ppio.h>
 
@@ -18,7 +20,7 @@
 ODP_STATIC_ASSERT((CHECK_IS_POWER2(SHADOW_Q_MAX_SIZE)), \
 	"SHADOW_Q_MAX_SIZE should be power of 2");
 
-struct tx_shadow_q {
+struct mvpp2_tx_shadow_q {
 	/* read index - used when releasing buffers */
 	u16				read_ind;
 	/* write index - used when sending buffers */
@@ -54,11 +56,11 @@ typedef struct {
 	/**< pool to alloc packets from */
 	odp_pool_t		pool;
 	/**< eth mac address */
-	u8			if_mac[ETH_ALEN];
+	u8			if_mac[ODPH_ETHADDR_LEN];
 	int			sockfd;
 	odp_pktio_capability_t	capa;	/**< interface capabilities */
 	int			num_out_queues;
-	struct tx_shadow_q
+	struct mvpp2_tx_shadow_q
 		shadow_qs[MVPP2_TOTAL_NUM_HIFS][MAX_NUM_OUTQS_PER_CORE];
 	struct inq_info		inqs[MVPP2_MAX_NUM_QS_PER_TC];
 	enum pp2_ppio_hash_type	hash_type;
