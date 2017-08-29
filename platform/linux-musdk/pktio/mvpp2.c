@@ -4,8 +4,6 @@
  * SPDX-License-Identifier:	 BSD-3-Clause
  */
 
-#ifdef ODP_PKTIO_MVPP2
-
 #include <odp_posix_extensions.h>
 
 #include <odp_packet_io_internal.h>
@@ -1488,5 +1486,3 @@ const pktio_if_ops_t mvpp2_pktio_ops = {
 	.recv = mvpp2_recv,
 	.send = mvpp2_send,
 };
-
-#endif /* ODP_PKTIO_MVPP2 */

@@ -165,7 +165,6 @@ __LIB__libodp_linux_la_SOURCES = \
 			   ../linux-generic/odp_packet_io.c \
 			   ../linux-generic/pktio/ethtool.c \
 			   pktio/io_ops.c \
-			   pktio/mvpp2.c \
 			   ../linux-generic/pktio/ipc.c \
 			   ../linux-generic/pktio/pktio_common.c \
 			   ../linux-generic/pktio/loop.c \
@@ -204,6 +203,10 @@ __LIB__libodp_linux_la_SOURCES = \
 			   ../linux-generic/arch/@ARCH_DIR@/odp_cpu_arch.c \
 			   ../linux-generic/arch/@ARCH_DIR@/odp_sysinfo_parse.c
 
+if ODP_PKTIO_MVPP2
+__LIB__libodp_linux_la_SOURCES += pktio/mvpp2.c
+endif
+
 if HAVE_PCAP
-__LIB__libodp_linux_la_SOURCES += pktio/pcap.c
+__LIB__libodp_linux_la_SOURCES += ../linux-generic/pktio/pcap.c
 endif
