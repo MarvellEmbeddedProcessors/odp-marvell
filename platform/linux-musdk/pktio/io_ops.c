@@ -15,8 +15,9 @@
 const pktio_if_ops_t * const pktio_if_ops[]  = {
 	&loopback_pktio_ops,
 /* MUSDK - start */
-	/* TODO: add flag! */
+#ifdef ODP_PKTIO_MVPP2
 	&mvpp2_pktio_ops,
+#endif
 /* MUSDK - end */
 #ifdef ODP_PKTIO_DPDK
 	&dpdk_pktio_ops,
