@@ -37,6 +37,12 @@ extern "C" {
 #define MVPP2_MAX_RX_BURST_SIZE		256
 #define MVPP2_MAX_TX_BURST_SIZE		256
 
+#define MVGIU_MAX_NUM_TCS_PER_PORT	1
+#define MVGIU_MAX_NUM_QS_PER_TC		1
+
+#define MVGIU_MAX_RX_BURST_SIZE		256
+#define MVGIU_MAX_TX_BURST_SIZE		8
+
 #define MVSAM_TOTAL_NUM_CIOS	4
 
 /* TODO: reserve some rings for the LK */

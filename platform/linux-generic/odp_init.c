@@ -3,6 +3,9 @@
  *
  * SPDX-License-Identifier:     BSD-3-Clause
  */
+
+#include <odp_posix_extensions.h>
+
 #include <odp/api/init.h>
 #include <odp_debug_internal.h>
 #include <odp/api/debug.h>
@@ -20,6 +23,10 @@
 
 #define _ODP_FILES_FMT "odp-%d-"
 #define _ODP_TMPDIR    "/tmp"
+
+#if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
+#include <odp_packet_musdk.h>
+#endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
 
 struct odp_global_data_s odp_global_data;
 
@@ -145,6 +152,9 @@ int odp_init_global(odp_instance_t *instance,
 	}
 	stage = SCHED_INIT;
 
+#ifdef ODP_MVNMP
+	nmp_init();
+#endif /* ODP_MVNMP */
 	if (odp_pktio_init_global()) {
 		ODP_ERR("ODP packet io init failed.\n");
 		goto init_failed;
@@ -182,7 +192,51 @@ int odp_init_global(odp_instance_t *instance,
 
 	*instance = (odp_instance_t)odp_global_data.main_pid;
 
-	return 0;
+#if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
+	char	file_name[REGFILE_MAX_FILE_NAME];
+	int	timeout = 100000; /* 10s timeout */
+	int	fd, err;
+
+	/* Map GIU regfile */
+	snprintf(file_name,
+		 sizeof(file_name),
+		 "%s%s%d", REGFILE_VAR_DIR, REGFILE_NAME_PREFIX, 0);
+
+	/* remove file from previous runs */
+	err = remove(file_name);
+	/* check if there was an error and if so check that it's not
+	 * "No such file or directory"
+	 */
+	if (err && errno != 2) {
+		ODP_ERR("can't delete regfile! (%s)\n", strerror(errno));
+		goto init_failed;
+	}
+
+	/* wait for regfile to be opened by NMP */
+	do {
+#ifdef ODP_MVNMP
+		nmp_schedule();
+#endif /* ODP_MVNMP */
+		fd = open(file_name, O_RDWR);
+		if (fd > 0)
+			close(fd);
+		usleep_range(100, 110);
+	} while (fd < 0 && --timeout);
+
+	if (!timeout) {
+		ODP_ERR("failed to find regfile %s. timeout exceeded.\n",
+			file_name);
+		return -EFAULT;
+	}
+
+#ifdef ODP_MVNMP
+	/* Make sure that last command response is sent to host. */
+	nmp_schedule();
+#endif /* ODP_MVNMP */
+
+#endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
+
+return 0;
 
 init_failed:
 	_odp_term_global(stage);
