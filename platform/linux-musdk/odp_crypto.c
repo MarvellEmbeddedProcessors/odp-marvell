@@ -99,6 +99,7 @@ struct crypto_session {
 	odp_queue_t     compl_queue;
 	odp_pool_t      output_pool;
 	char            iv[MAX_IV_SIZE];
+	int             sid;
 	odp_crypto_op_t op;
 	struct crypto_cio_info*   cio;
 	struct sam_sa  *sa;
@@ -115,10 +116,8 @@ struct crypto_request {
 #define MAX_NUM_OF_THREADS            2
 #define MAX_NUM_OF_CIO_PER_WORKER     2
 
-static uint8_t	used_cios[MAX_NUM_OF_CIO_PER_WORKER] = {MVSAM_CIOS_RSRV};
-
-static unsigned int         num_session   = 0;
-static unsigned int         sam_num_inst  = 1;
+static uint8_t      used_cios[MAX_NUM_OF_CIO_PER_WORKER] = {MVSAM_CIOS_RSRV};
+static unsigned int sam_num_inst  = 1;
 
 #define is_multi_sam()  ((sam_num_inst > 1) ? 1 : 0)
 
@@ -273,10 +272,17 @@ static int mvsam_odp_crypto_session_create(
 {
 	struct sam_session_params sam_session;
 	struct sam_sa *sa = NULL;
-	int           rc;
+	int           rc, sid, i;
+
+	for (i = 0 ; i < MVSAM_MAX_NUM_SESSIONS ; i++) {
+		if (sessions[i].sid == -1) {
+			sid = i;
+			break;
+		}
+	}
 
 	/* check we aren't pass the maximum number of sessions*/
-	if (odp_unlikely(num_session) == MVSAM_MAX_NUM_SESSIONS) {
+	if (odp_unlikely(i == MVSAM_MAX_NUM_SESSIONS)) {
 		ODP_ERR("reach maximum sessions. failed to create a new session!\n");
 		*status = -1;
 		return -1;
@@ -295,15 +301,15 @@ static int mvsam_odp_crypto_session_create(
 		*status = -1;
 		return -1;
 	}
-	ODP_DBG("crypto: session (%d) created\n", num_session);
-	sessions[num_session].compl_queue   = params->compl_queue;
-	sessions[num_session].output_pool   = params->output_pool;
-	sessions[num_session].op            = params->op;
-	sessions[num_session].sa            = sa;
-	memcpy(sessions[num_session].iv, sam_session.cipher_iv, MAX_IV_SIZE);
-	*session_out = (odp_crypto_session_t)&sessions[num_session++];
+	sessions[sid].compl_queue   = params->compl_queue;
+	sessions[sid].output_pool   = params->output_pool;
+	sessions[sid].op            = params->op;
+	sessions[sid].sa            = sa;
+	sessions[sid].sid           = sid;
+	memcpy(sessions[sid].iv, sam_session.cipher_iv, MAX_IV_SIZE);
+	*session_out = (odp_crypto_session_t)&sessions[sid];
 	*status = 0;
-	ODP_DBG("crypto: session-%d has created\n", num_session);
+	ODP_DBG("crypto: session-%d has created\n", sid);
 	return rc;
 }
 
@@ -317,6 +323,7 @@ static int mvsam_odp_crypto_session_destroy(odp_crypto_session_t session)
 		ODP_ERR("error while destroy session\n");
 		return rc;
 	}
+	crp_session->sid = -1;
 	return 0;
 }
 
@@ -558,6 +565,10 @@ static int mvsam_odp_crypto_init_global(void)
 		memset(crp_thread[i].cio[0].sam_op_params, 0, sizeof(struct sam_cio_op_params));
 		memset(crp_thread[i].cio[1].sam_op_params, 0, sizeof(struct sam_cio_op_params));
 	}
+
+	for (i = 0 ; i < MVSAM_MAX_NUM_SESSIONS ; i++)
+		sessions[i].sid = -1;
+
 	return err;
 }
 
@@ -565,8 +576,12 @@ static int mvsam_odp_crypto_term_global(void)
 {
 	unsigned int i, cio_local_idx;
 
-	for (i = 0 ; i < num_session ; i++)
-		sam_session_destroy(sessions[i].sa);
+	for (i = 0 ; i < MVSAM_MAX_NUM_SESSIONS ; i++) {
+		if (sessions[i].sid != -1) {
+			sam_session_destroy(sessions[i].sa);
+			sessions[i].sid = -1;
+		}
+	}
 
 	for(i = 0 ; i < MAX_NUM_OF_THREADS ; i++) {
 		for(cio_local_idx = 0 ; cio_local_idx < sam_num_inst ; cio_local_idx++)
