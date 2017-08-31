@@ -108,8 +108,8 @@ static void sig_usr(int sig);
 
 #define MAX_CRYPTO_TO_CPU_PKT_THREASHOULD 256
 
-#define CRYPTO_CLEAN_RING_REP      20
-#define CRYPTO_CLEAN_TIME_OUT_MSEC 50
+#define CRYPTO_CLEAN_RING_REP      50
+#define CRYPTO_CLEAN_TIME_OUT_MSEC 20
 
 #define CHECK_RC(rc,ctx,pkt_tbl,i,j)  if(rc==PKT_DROP){free_pkt_ctx(ctx[i]);odp_packet_free(pkt_tbl[i]);continue;}
 //#define CHECK_RC(rc,ctx,pkt_tbl,i,j)  if((rc!=PKT_CONTINUE)&&(rc!=PKT_POSTED)){printf("NOT CONTINUE!!! rc=%d i=%d j=%d\n",rc,i,j);}
