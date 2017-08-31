@@ -81,11 +81,9 @@
 
 #define MAX_STRING		32
 
-#define ODP_NAT_AGING_ENABLE	1
 #define DEFAULT_AGING_TIME	300
 #define MAX_AGING_TIME		3600
 
-#define DSA_CPU_CODE		0x2
 #define MV_DSA_MODE_BIT		(0x1ULL << 62)
 #define MV_EXT_DSA_MODE_BIT	(0x1ULL << 63)
 
@@ -148,7 +146,7 @@ typedef struct {
 	char  tap_str[128];    /**< Storage for tap interface names */
 	int error_check;        /**< Check packet errors */
 
-	uint32_t aging_time; /* aging time for DNAT entries */
+	uint32_t aging_time;	/* NAT entries aging time */
 	int dsa_mode;
 	int debug_mode;
 	int print_table;
@@ -588,11 +586,28 @@ static void *odp_nat_packet_l4_ptr(odp_packet_t pkt, void *l3_hdr, uint32_t l3_o
 	return NULL;
 }
 
-static int process_tocpu_lan(odp_packet_t pkt)
+static inline int strip_dsa_hdr(odp_packet_t pkt)
+{
+	odph_ethaddr_t macaddr[2];
+
+	if (odp_packet_copy_to_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t),
+				   &macaddr) != 0)
+		return 1;
+
+	odp_packet_pull_head(pkt, sizeof(odph_dsa_t));
+
+	if (odp_packet_copy_from_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t),
+				     &macaddr) != 0) {
+		return 1;
+	}
+
+	return 0;
+}
+
+static int process_tocpu_lan(odp_packet_t pkt, int strip_dsa)
 {
     odp_nat_pktio_t pktio;
     int tx_idx;
-    odph_ethaddr_t macaddr[2];
 
     tx_idx = gbl_args->appl.if_phy_count;
 
@@ -601,15 +616,10 @@ static int process_tocpu_lan(odp_packet_t pkt)
     pktio.tx_queue = gbl_args->pktios[tx_idx].tx_q[0];
     pktio.tx_pktio = gbl_args->pktios[tx_idx].pktio;
 
-    if(odp_packet_copy_to_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t), &macaddr) != 0) {
-        return 1;
-    }
-
-    odp_packet_pull_head(pkt, sizeof(odph_dsa_t));
-
-    if(odp_packet_copy_from_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t), &macaddr) != 0) {
-        return 1;
-    }
+	if (strip_dsa == 1) {
+		if (odp_unlikely((strip_dsa_hdr(pkt) == 1)))
+			return 1;
+	}
 
     if (odp_unlikely(gbl_args->appl.debug_mode)) {
         int j;
@@ -628,7 +638,7 @@ static int process_tocpu_lan(odp_packet_t pkt)
         return 1;
 }
 
-static int process_tocpu_wan(odp_packet_t pkt)
+static int process_tocpu_wan(odp_packet_t pkt, int strip_dsa)
 {
     odp_nat_pktio_t pktio;
 	int tx_idx = 0;
@@ -650,15 +660,10 @@ static int process_tocpu_wan(odp_packet_t pkt)
     pktio.tx_queue = gbl_args->pktios[tx_idx].tx_q[0];
     pktio.tx_pktio = gbl_args->pktios[tx_idx].pktio;
 
-    if(odp_packet_copy_to_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t), &macaddr) != 0) {
-        return 1;
-    }
-
-    odp_packet_pull_head(pkt, sizeof(odph_dsa_t));
-
-    if(odp_packet_copy_from_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t), &macaddr) != 0) {
-        return 1;
-    }
+	if (strip_dsa == 1) {
+		if (odp_unlikely((strip_dsa_hdr(pkt) == 1)))
+			return 1;
+	}
 
     if (odp_unlikely(gbl_args->appl.debug_mode)) {
         int j;
@@ -782,17 +787,17 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
         return 1;
 }
 
-static int is_control_sent_to_nat(odp_packet_t pkt)
+/*
+static int unknown_pkt_to_cpu(odp_packet_t pkt)
 {
 	odph_dsa_ethhdr_t *eth;
 
 	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-	//check CPU_CODE bit1 (DSA word0, bit 16)
-	if (eth->dsa.src_port & (DSA_CPU_CODE >> 1))
+	if ((eth->dsa.src_port & 0x7) == (DEFAULT_CPU_CODE >> 1))
 		return 1;
-
 	return 0;
 }
+*/
 
 /**
  * Find entry in hash bucket list
@@ -861,8 +866,9 @@ static inline nat_entry_t *find_hash_entry(nat_entry_t tbl[][NAT_TBL_DEPTH],
 /**
  * Add entry to hash table
  *
- * The function is not thread safe. It is a responsibily of the application
- * to call for the function inside a lock
+ * The function is not thread safe and doesn't check the existense of the entry.
+ * It is a responsibily of the application to call for the function inside a
+ * critical region and check the existense of the entry before the call.
  *
  * @param tbl		Hash Table
  * @param hash_value    32 bit hash key value
@@ -870,13 +876,12 @@ static inline nat_entry_t *find_hash_entry(nat_entry_t tbl[][NAT_TBL_DEPTH],
  *
  * @return		pointer to added entry or NULL for error
  */
-static nat_entry_t *add_hash_entry(nat_entry_t tbl[][NAT_TBL_DEPTH],
-				   uint32_t hash_value,
-				   nat_entry_t *entry)
+static inline nat_entry_t *add_hash_entry(nat_entry_t tbl[][NAT_TBL_DEPTH],
+					  uint32_t hash_value,
+					  nat_entry_t *entry)
 {
 	int i, j;
 	uint32_t hash_idx, new_index;
-	nat_entry_t *search_entry;
 
 	hash_idx = hash_value & (NAT_TBL_SIZE - 1);
 
@@ -911,6 +916,9 @@ static nat_entry_t *add_hash_entry(nat_entry_t tbl[][NAT_TBL_DEPTH],
 			tbl[hash_idx][i].hash_location = HASH_SEC_LOCATION;
 			memcpy((void *)&tbl[new_index][j],
 			       (void *)&tbl[hash_idx][i], sizeof(nat_entry_t));
+			/* update the pointer of the reversed entry */
+			tbl[new_index][j].reverse_nat_entry->reverse_nat_entry =
+				&tbl[new_index][j];
 			/* place the new entry */
 			memcpy((void *)&tbl[hash_idx][i], (void *)entry,
 			       sizeof(nat_entry_t));
@@ -962,29 +970,77 @@ static inline void snat_dsa_processing(odp_packet_t pkt)
 	eth->dsa.dst_dev |= src_dev_id;
 }
 
+static inline int add_dsa_snat_fromcpu(odp_packet_t pkt,
+				       odp_nat_pktio_t *rx_pktio)
+{
+	odph_dsa_t   dsaFill;
+	odph_ethaddr_t macaddr[2];
+	uint8_t *data;
+	int j;
+
+	memset(&dsaFill, 0, sizeof(odph_dsa_t));
+	/* bit[31,30]:11 (forward), bit[28:24]:01000 (src_dev) */
+	dsaFill.src_dev = 0xC0;
+	dsaFill.src_dev |= gbl_args->appl.src_dev_id & DEV_ID_MASK;
+	/* bit[23,19]:63(src_port) */
+	dsaFill.src_port = DSA_SRC_PORT_CPU << 3;
+	dsaFill.word1_byte3 = 0x20;
+	dsaFill.vid  = htons((1 << 12) |
+		       gbl_args->appl.wan_vid[rx_pktio->rx_idx -
+		       gbl_args->appl.if_phy_count - 1]);
+
+	if (odp_packet_copy_to_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t),
+				   &macaddr) != 0) {
+		return 1;
+	}
+
+	odp_packet_push_head(pkt, sizeof(odph_dsa_t));
+
+	if (odp_packet_copy_from_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t),
+				     &macaddr) != 0) {
+		return 1;
+	}
+
+	if (odp_packet_copy_from_mem(pkt, 2 * sizeof(odph_ethaddr_t),
+				     sizeof(odph_dsa_t), &dsaFill) != 0) {
+		return 1;
+	}
+
+	if (odp_unlikely(gbl_args->appl.debug_mode)) {
+		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+		printf("Routed pkt from CPU.\n");
+
+		for (j = 0; j < 64; j++)
+			printf("%02x ", data[j]);
+		printf("\n");
+	}
+	return 0;
+}
+
 static inline void do_snat(odph_ipv4hdr_t *ipv4hdr, odph_udphdr_t *udphdr,
-			   nat_entry_t *entry, uint8_t protocol)
+			   uint32_t target_ip, uint16_t target_port,
+			   uint8_t protocol)
 {
 	odph_icmphdr_t *icmphdr = (odph_icmphdr_t *)udphdr;
 	odph_tcphdr_t  *tcphdr = (odph_tcphdr_t *)udphdr;
 	/*
 	if (odp_unlikely(gbl_args->appl.debug_mode))
 		printf("Changing src address from %08x to %08x\n",
-		       ipv4hdr->src_addr, htonl(entry->target_ip));
+		       ipv4hdr->src_addr, htonl(target_ip));
 	*/
-	ipv4hdr->src_addr = ntohl(entry->target_ip);
+	ipv4hdr->src_addr = ntohl(target_ip);
 	ipv4hdr->chksum = 0;
 	switch (protocol) {
 	case ODPH_IPPROTO_UDP:
-		udphdr->src_port = ntohs(entry->target_port);
+		udphdr->src_port = ntohs(target_port);
 		udphdr->chksum = 0;
 		break;
 	case ODPH_IPPROTO_TCP:
-		tcphdr->src_port = ntohs(entry->target_port);
+		tcphdr->src_port = ntohs(target_port);
 		tcphdr->cksm = 0;
 		break;
 	case ODPH_IPPROTO_ICMP:
-		icmphdr->un.echo.id = ntohs(entry->target_port);
+		icmphdr->un.echo.id = ntohs(target_port);
 		icmphdr->chksum = 0;
 		icmphdr->chksum = ~net_cksum((uint8_t *)icmphdr,
 					     (ntohs(ipv4hdr->tot_len) -
@@ -995,21 +1051,225 @@ static inline void do_snat(odph_ipv4hdr_t *ipv4hdr, odph_udphdr_t *udphdr,
 	}
 }
 
-static inline int send_to_snat(odp_packet_t pkt,
-			       nat_entry_t tbl[][NAT_TBL_DEPTH])
+static inline void do_dnat(odph_ipv4hdr_t *ipv4hdr, odph_udphdr_t *udphdr,
+			   uint32_t target_ip, uint16_t target_port,
+			   uint8_t protocol)
+{
+	odph_icmphdr_t *icmphdr = (odph_icmphdr_t *)udphdr;
+	odph_tcphdr_t  *tcphdr = (odph_tcphdr_t *)udphdr;
+	/*
+	if (odp_unlikely(gbl_args->appl.debug_mode))
+		printf("Changing dst address from %08x to %08x\n",
+		       ipv4hdr->dst_addr, htonl(target_ip));
+	*/
+	ipv4hdr->dst_addr = htonl(target_ip);
+	ipv4hdr->chksum = 0;
+	switch (protocol) {
+	case ODPH_IPPROTO_UDP:
+		udphdr->dst_port = htons(target_port);
+		udphdr->chksum = 0;
+		break;
+	case ODPH_IPPROTO_TCP:
+		tcphdr->dst_port = htons(target_port);
+		tcphdr->cksm = 0;
+		break;
+	case ODPH_IPPROTO_ICMP:
+		icmphdr->un.echo.id = htons(target_port);
+		icmphdr->chksum = 0;
+		icmphdr->chksum = ~net_cksum((uint8_t *)icmphdr,
+					     (ntohs(ipv4hdr->tot_len) -
+					     ODPH_IPV4HDR_LEN) >> 1);
+		break;
+	default:
+		break;
+	}
+}
+
+/**
+ * Learn NAT entry
+ *
+ * @param snat_ipv4	SNAT 5-tuple
+ * @param hash_value    32 bit hash key value
+ * @param ipv4hdr	IP header pointer
+ * @param udphdr	L4 header pointer
+ *
+ * @param ret_ptr	returned pointer to added entry
+ * @return		process_pkt proceed value
+ *			0: send (forward not added entry), 1: drop,
+ *			4: successfully added entry, snat should be performed
+ */
+static inline int learn_nat_entry(ipv4_5tuple_t snat_ipv4, uint32_t hash_value,
+				  odph_ipv4hdr_t *ipv4hdr,
+				  odph_udphdr_t *udphdr, nat_entry_t **ret_ptr)
+{
+	uint32_t target_ip;
+	ipv4_5tuple_t dnat_ipv4;
+	nat_entry_t snat_entry, dnat_entry;
+	nat_entry_t *snat_ptr, *dnat_ptr;
+	uint32_t dnat_hash_value;
+	odph_nat_wan_pool_t *port_pool = NULL;
+	odph_nat_pool_t *nat_pool;
+
+	/* Not found in SNAT table */
+	/* 1. Search the IP mapping entry */
+	target_ip = ip_table_lookup(snat_ipv4.src_ip);
+	/* No match in IP table,probably control plane packet,drop it */
+	if (odp_unlikely(!target_ip)) {
+		if (odp_unlikely(gbl_args->appl.debug_mode)) {
+			printf("not found in SNAT table. ");
+			printf("target_ip doesn't exist\n");
+		}
+		return 1;
+	}
+
+	port_pool = ip_table_lookup_pool(snat_ipv4.src_ip);
+	switch (snat_ipv4.protocol) {
+	case ODPH_IPPROTO_UDP:
+		nat_pool = &port_pool->udp_port_pool;
+		break;
+	case ODPH_IPPROTO_TCP:
+		nat_pool = &port_pool->tcp_port_pool;
+		break;
+	case ODPH_IPPROTO_ICMP:
+		nat_pool = &port_pool->icmp_id_pool;
+		break;
+	default:
+		return 0;
+	}
+
+	/* prepare SNAT entry */
+	snat_entry.ipv4_5tuple = snat_ipv4;
+	snat_entry.target_ip = target_ip;
+	odp_rwlock_write_lock(&gbl_args->snat_lock);
+	/* verify under lock that the entry doesn't exist */
+	snat_ptr = find_hash_entry(gbl_args->snat_tbl, hash_value, &snat_ipv4);
+	if (NULL != snat_ptr) {
+		odp_rwlock_write_unlock(&gbl_args->snat_lock);
+		snat_ptr->counter = 0;
+		*ret_ptr = snat_ptr;
+		if (odp_likely(snat_ptr->target_ip)) {
+			/* DO SNAT */
+			return 4;
+		}
+		return 0;
+	}
+
+	/* allocate a port from the pool in order to modify a local
+	 * source port */
+	snat_entry.target_port = allocate_node_for_pool(nat_pool);
+	if (odp_unlikely(snat_entry.target_port == 0)) {
+		odp_rwlock_write_unlock(&gbl_args->snat_lock);
+		return 1;
+	}
+
+	/* 2. Add to SNAT table */
+	snat_ptr = add_hash_entry(gbl_args->snat_tbl, hash_value, &snat_entry);
+
+	if (odp_unlikely(NULL == snat_ptr)) {
+		release_node_for_pool(nat_pool, snat_entry.target_port);
+		odp_rwlock_write_unlock(&gbl_args->snat_lock);
+
+		if (odp_unlikely(gbl_args->appl.debug_mode)) {
+			printf("Failed to add SNAT entry ");
+			printf("%08x %d %08x %d %d\n", snat_ipv4.src_ip,
+			       snat_ipv4.src_port, snat_ipv4.dst_ip,
+			       snat_ipv4.dst_port, snat_ipv4.protocol);
+		}
+		return 1;
+	}
+
+	odp_rwlock_write_unlock(&gbl_args->snat_lock);
+	*ret_ptr = snat_ptr;
+
+	if (odp_unlikely(gbl_args->appl.debug_mode))
+		printf("add to snat table: %08x %d %08x %d %d %08x\n",
+		       snat_ipv4.src_ip, snat_ipv4.src_port,
+		       snat_ipv4.dst_ip, snat_ipv4.dst_port,
+		       snat_ipv4.protocol, snat_ptr->target_ip);
+
+	/* 3. Add to DNAT table */
+	if (odp_likely(snat_entry.target_ip)) {
+		/* DNAT entry */
+		dnat_ipv4.src_ip = snat_ipv4.dst_ip;
+		dnat_ipv4.src_port = snat_ipv4.dst_port;
+		dnat_ipv4.dst_port = snat_ptr->target_port;
+		dnat_ipv4.protocol = snat_ipv4.protocol;
+		dnat_ipv4.dst_ip = snat_ptr->target_ip;
+		dnat_ipv4.pad1 = 0;
+		dnat_ipv4.pad2 = 0;
+		if (odp_unlikely(snat_ipv4.protocol == ODPH_IPPROTO_ICMP)) {
+			dnat_ipv4.src_port = snat_entry.target_port;
+			dnat_ipv4.dst_port = 0;
+		}
+		dnat_entry.ipv4_5tuple = dnat_ipv4;
+		dnat_entry.target_ip = snat_ipv4.src_ip;
+		dnat_entry.target_port = snat_ipv4.src_port;
+		dnat_entry.reverse_nat_entry = snat_ptr;
+
+		dnat_hash_value = XXH32((void *)&dnat_ipv4,
+					sizeof(ipv4_5tuple_t), NAT_HASH_SEED);
+
+		odp_rwlock_write_lock(&gbl_args->dnat_lock);
+		dnat_ptr = add_hash_entry(gbl_args->dnat_tbl,
+					  dnat_hash_value, &dnat_entry);
+		odp_rwlock_write_unlock(&gbl_args->dnat_lock);
+
+		if (odp_unlikely(NULL == dnat_ptr)) {
+			if (odp_unlikely(gbl_args->appl.debug_mode)) {
+				printf("Failed to add DNAT entry ");
+				printf("%08x %d %08x %d %d\n",
+				       dnat_ipv4.src_ip, dnat_ipv4.src_port,
+				       dnat_ipv4.dst_ip, dnat_ipv4.dst_port,
+				       dnat_ipv4.protocol);
+			}
+			return 1;
+		}
+
+		/* update snat reverse entry */
+		odp_rwlock_write_lock(&gbl_args->snat_lock);
+		if (snat_ptr->hash_value == hash_value)
+			snat_ptr->reverse_nat_entry = dnat_ptr;
+		else
+			dnat_ptr->valid = 0;
+
+		odp_rwlock_write_unlock(&gbl_args->snat_lock);
+
+		if (odp_unlikely(gbl_args->appl.debug_mode)) {
+			printf("add to dnat table: ");
+			printf("%08x %d %08x %d %d %08x -> %p\n",
+			       dnat_ipv4.src_ip, dnat_ipv4.src_port,
+			       dnat_ipv4.dst_ip, dnat_ipv4.dst_port,
+			       dnat_ipv4.protocol, snat_ipv4.src_ip,
+			       snat_ptr->reverse_nat_entry);
+		}
+
+		/* 4. DO SNAT */
+		return 4;
+	}
+
+	return 0;
+}
+
+/**
+ * Process new entry
+ *
+ * This function takes care of unknown packets arrived from switch and going to
+ * CPU.
+ *
+ * @param pkt		pointer to odp_packet_t
+ *
+ * @return		0 - success
+ */
+static inline int process_new_entry(odp_packet_t pkt)
 {
 	odph_ipv4hdr_t *ipv4hdr;
 	odph_udphdr_t  *udphdr;
 	uint16_t ethtype;
 	uint32_t l3_offset;
-	uint32_t target_ip;
-	ipv4_5tuple_t snat_ipv4, dnat_ipv4;
-	uint32_t hash_value, dnat_hash_value;
-	nat_entry_t cur_entry, *entry_ptr;
-	nat_entry_t snat_entry, dnat_entry;
-	nat_entry_t *snat_entry_ptr, *dnat_entry_ptr;
-	odph_nat_wan_pool_t *port_pool = NULL;
-	odph_nat_pool_t *nat_pool;
+	ipv4_5tuple_t ipv4;
+	nat_entry_t *entry_ptr;
+	uint32_t hash_value;
+	int status;
 
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
 							  &ethtype);
@@ -1021,8 +1281,103 @@ static inline int send_to_snat(odp_packet_t pkt,
 	/* udphdr is L4 header, could be udp, tcp or icmp header */
 	udphdr = (odph_udphdr_t *)odp_nat_packet_l4_ptr(pkt, ipv4hdr, l3_offset,
 							ethtype);
-	if (odp_likely(gbl_args->appl.dsa_mode))
-		snat_dsa_processing(pkt);
+
+	if (odp_unlikely(!(ipv4hdr && udphdr)))
+		return 0;
+
+	if (odp_unlikely(0 != build_hash_search_key(&ipv4, ipv4hdr,
+						    udphdr)))
+		return 0;
+
+	if (odp_likely(gbl_args->appl.dsa_mode)) {
+		if (odp_unlikely(strip_dsa_hdr(pkt) == 1))
+			return 1;
+	}
+
+	hash_value = XXH32((void *)&ipv4, sizeof(ipv4_5tuple_t), NAT_HASH_SEED);
+
+	entry_ptr = find_hash_entry(gbl_args->snat_tbl, hash_value, &ipv4);
+	if (entry_ptr == NULL) {
+		status = learn_nat_entry(ipv4, hash_value, ipv4hdr, udphdr,
+					 &entry_ptr);
+		if (odp_likely(status == 4)) {
+			/* only learning, skip SNAT */
+			status = 0;
+		}
+		return status;
+	}
+
+	if (odp_unlikely(gbl_args->appl.debug_mode)) {
+		printf("process_new_entry. ");
+		printf("Found in snat table: %08x %d %08x %d %d\n",
+		       ipv4.src_ip, ipv4.src_port, ipv4.dst_ip,
+		       ipv4.dst_port, ipv4.protocol);
+	}
+	return 0;
+}
+
+static inline int supported_dsa_l3_pkt(odp_packet_t pkt)
+{
+	odph_ipv4hdr_t *ipv4hdr;
+	uint16_t ethtype;
+	uint32_t l3_offset;
+
+	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
+							  &ethtype);
+	if (!ipv4hdr)
+		return 0;
+	if (ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) != ODPH_IPV4)
+		return 0;
+	if ((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
+	    (ipv4hdr->proto != ODPH_IPPROTO_TCP) &&
+	    (ipv4hdr->proto != ODPH_IPPROTO_ICMP))
+		return 0;
+
+	return 1;
+}
+
+static inline int supported_l3_pkt(odp_packet_t pkt)
+{
+	odph_ipv4hdr_t *ipv4hdr;
+
+	ipv4hdr = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
+	if (!ipv4hdr)
+		return 0;
+	if (ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) != ODPH_IPV4)
+		return 0;
+	if ((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
+	    (ipv4hdr->proto != ODPH_IPPROTO_TCP) &&
+	    (ipv4hdr->proto != ODPH_IPPROTO_ICMP))
+		return 0;
+
+	return 1;
+}
+
+static inline int send_to_snat(odp_packet_t pkt, uint8_t pkt_from_tap)
+{
+	odph_ipv4hdr_t *ipv4hdr;
+	odph_udphdr_t  *udphdr;
+	uint16_t ethtype, target_port;
+	uint32_t l3_offset, target_ip;
+	ipv4_5tuple_t snat_ipv4;
+	nat_entry_t *entry_ptr;
+	uint32_t hash_value;
+	int status;
+
+	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
+							  &ethtype);
+
+	/* For IPv6, don't do anything */
+	if (odp_unlikely(ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) == ODPH_IPV6))
+		return 0;
+
+	/* udphdr is L4 header, could be udp, tcp or icmp header */
+	udphdr = (odph_udphdr_t *)odp_nat_packet_l4_ptr(pkt, ipv4hdr, l3_offset,
+							ethtype);
+	if (odp_likely(gbl_args->appl.dsa_mode)) {
+		if (odp_likely(pkt_from_tap == 0))
+			snat_dsa_processing(pkt);
+	}
 
 	if (odp_unlikely(!(ipv4hdr && udphdr))) {
 		if (odp_unlikely(gbl_args->appl.debug_mode)) {
@@ -1037,228 +1392,61 @@ static inline int send_to_snat(odp_packet_t pkt,
 	}
 
 	if (odp_unlikely(0 != build_hash_search_key(&snat_ipv4, ipv4hdr,
-						    udphdr)))
+						    udphdr))) {
 		return 1;
+	}
 
 	hash_value = XXH32((void *)&snat_ipv4, sizeof(ipv4_5tuple_t),
 			   NAT_HASH_SEED);
 
-	entry_ptr = find_hash_entry(tbl, hash_value, &snat_ipv4);
-	if (entry_ptr != NULL) {
-		/* save the entry since working without read locks. the entry
-		 * can be removed from the table during packet modification */
-		memcpy(&cur_entry, entry_ptr, sizeof(nat_entry_t));
+	entry_ptr = find_hash_entry(gbl_args->snat_tbl, hash_value, &snat_ipv4);
 
-		if (odp_unlikely((!entry_ptr->valid) ||
-				 (entry_ptr->hash_value != hash_value)))
-			return 1;
-
-		if (odp_unlikely(!cur_entry.target_ip))
-			return 0;
-
-		/* zero aging counter */
-		entry_ptr->counter = 0;
-		/* entry_ptr->reverse_nat_entry->counter = 0; */
-
+	if (odp_unlikely(entry_ptr == NULL)) {
+		/* aged out NAT entry can still be active in the switch */
+		status = learn_nat_entry(snat_ipv4, hash_value, ipv4hdr, udphdr,
+					 &entry_ptr);
+		if (odp_unlikely(status != 4))
+			return status;
+	} else {
 		if (odp_unlikely(gbl_args->appl.debug_mode)) {
 			printf("Found in snat table: %08x %d %08x %d %d %08x\n",
 			       snat_ipv4.src_ip, snat_ipv4.src_port,
 			       snat_ipv4.dst_ip, snat_ipv4.dst_port,
-			       snat_ipv4.protocol, entry_ptr->target_ip);
-		}
-
-		do_snat(ipv4hdr, udphdr, &cur_entry, snat_ipv4.protocol);
-	} else {
-		/* Not found in SNAT table */
-		/* 1. Search the IP mapping entry */
-		target_ip = ip_table_lookup(snat_ipv4.src_ip);
-		/* No match in IP table,probably control plane packet,drop it */
-		if (odp_unlikely(!target_ip)) {
-			if (odp_unlikely(gbl_args->appl.debug_mode)) {
-				printf("not found in SNAT table. ");
-				printf("target_ip doesn't exist\n");
-			}
-			return 1;
-		}
-
-		port_pool = ip_table_lookup_pool(snat_ipv4.src_ip);
-		switch (snat_ipv4.protocol) {
-		case ODPH_IPPROTO_UDP:
-			nat_pool = &port_pool->udp_port_pool;
-			break;
-		case ODPH_IPPROTO_TCP:
-			nat_pool = &port_pool->tcp_port_pool;
-			break;
-		case ODPH_IPPROTO_ICMP:
-			nat_pool = &port_pool->icmp_id_pool;
-			break;
-		default:
-			return 0;
-		}
-
-		/* prepare SNAT entry */
-		snat_entry.ipv4_5tuple = snat_ipv4;
-		snat_entry.target_ip = target_ip;
-
-		odp_rwlock_write_lock(&gbl_args->snat_lock);
-		/* verify under lock that the entry doesn't exist */
-		entry_ptr = find_hash_entry(tbl, hash_value, &snat_ipv4);
-		if (NULL != entry_ptr) {
-			odp_rwlock_write_unlock(&gbl_args->snat_lock);
-			entry_ptr->counter = 0;
-			if (odp_likely(entry_ptr->target_ip))
-				do_snat(ipv4hdr, udphdr, entry_ptr,
-					snat_ipv4.protocol);
-			return 0;
-		}
-
-		/* allocate a port from the pool in order to modify a local
-		 * source port */
-		snat_entry.target_port = allocate_node_for_pool(nat_pool);
-		if (odp_unlikely(snat_entry.target_port == 0)) {
-			odp_rwlock_write_unlock(&gbl_args->snat_lock);
-			return 1;
-		}
-
-		/* 2. Add to SNAT table */
-		snat_entry_ptr = add_hash_entry(tbl, hash_value, &snat_entry);
-		if (odp_unlikely(NULL == snat_entry_ptr)) {
-			release_node_for_pool(nat_pool, snat_entry.target_port);
-			odp_rwlock_write_unlock(&gbl_args->snat_lock);
-
-			if (odp_unlikely(gbl_args->appl.debug_mode)) {
-				printf("Failed to add SNAT entry ");
-				printf("%08x %d %08x %d %d\n", snat_ipv4.src_ip,
-				       snat_ipv4.src_port, snat_ipv4.dst_ip,
-				       snat_ipv4.dst_port, snat_ipv4.protocol);
-			}
-			return 1;
-		}
-
-		odp_rwlock_write_unlock(&gbl_args->snat_lock);
-
-		if (odp_unlikely(gbl_args->appl.debug_mode))
-			printf("add to snat table: %08x %d %08x %d %d %08x\n",
-			       snat_ipv4.src_ip, snat_ipv4.src_port,
-			       snat_ipv4.dst_ip, snat_ipv4.dst_port,
-			       snat_ipv4.protocol, snat_entry_ptr->target_ip);
-
-		/* 3. Add to DNAT table */
-		if (odp_likely(snat_entry.target_ip)) {
-			/* DNAT entry */
-			dnat_ipv4.src_ip = snat_ipv4.dst_ip;
-			dnat_ipv4.src_port = snat_ipv4.dst_port;
-			dnat_ipv4.dst_port = snat_entry_ptr->target_port;
-			dnat_ipv4.protocol = snat_ipv4.protocol;
-			dnat_ipv4.dst_ip = snat_entry_ptr->target_ip;
-			dnat_ipv4.pad1 = 0;
-			dnat_ipv4.pad2 = 0;
-			if (odp_unlikely(snat_ipv4.protocol ==
-			    ODPH_IPPROTO_ICMP)) {
-				dnat_ipv4.src_port = snat_entry.target_port;
-				dnat_ipv4.dst_port = 0;
-			}
-			dnat_entry.ipv4_5tuple = dnat_ipv4;
-			dnat_entry.target_ip = snat_ipv4.src_ip;
-			dnat_entry.target_port = snat_ipv4.src_port;
-			dnat_entry.reverse_nat_entry = snat_entry_ptr;
-
-			dnat_hash_value = XXH32((void *)&dnat_ipv4,
-						sizeof(ipv4_5tuple_t),
-						NAT_HASH_SEED);
-
-			odp_rwlock_write_lock(&gbl_args->dnat_lock);
-			dnat_entry_ptr = add_hash_entry(gbl_args->dnat_tbl,
-							dnat_hash_value,
-							&dnat_entry);
-			odp_rwlock_write_unlock(&gbl_args->dnat_lock);
-
-			if (odp_unlikely(NULL == dnat_entry_ptr)) {
-				if (odp_unlikely(gbl_args->appl.debug_mode)) {
-					printf("Failed to add DNAT entry ");
-					printf("%08x %d %08x %d %d\n",
-					       dnat_ipv4.src_ip,
-					       dnat_ipv4.src_port,
-					       dnat_ipv4.dst_ip,
-					       dnat_ipv4.dst_port,
-					       dnat_ipv4.protocol);
-				}
-				return 1;
-			}
-
-			/* update snat reverse entry */
-			odp_rwlock_write_lock(&gbl_args->snat_lock);
-			if (snat_entry_ptr->hash_value == hash_value) {
-				snat_entry_ptr->reverse_nat_entry =
-				dnat_entry_ptr;
-			} else {
-				dnat_entry_ptr->valid = 0;
-			}
-			odp_rwlock_write_unlock(&gbl_args->snat_lock);
-
-			if (odp_unlikely(gbl_args->appl.debug_mode)) {
-				printf("add to dnat table: ");
-				printf("%08x %d %08x %d %d %08x -> %p\n",
-				       dnat_ipv4.src_ip, dnat_ipv4.src_port,
-				       dnat_ipv4.dst_ip, dnat_ipv4.dst_port,
-				       dnat_ipv4.protocol, snat_ipv4.src_ip,
-				       snat_entry_ptr->reverse_nat_entry);
-				printf("Chaning src IP from %08x to %08x,",
-				       ipv4hdr->src_addr,
-				       snat_entry_ptr->target_ip);
-				printf("src port to %d\n",
-				       snat_entry_ptr->target_port);
-			}
-
-			/* 4. DO NAT */
-			do_snat(ipv4hdr, udphdr, snat_entry_ptr,
-				snat_ipv4.protocol);
+			       snat_ipv4.protocol, target_ip);
 		}
 	}
 
+	/* Perform NAT */
+	/* working without read locks. the entry can be removed from the table
+	 * during packet modification */
+	if (odp_unlikely(entry_ptr == NULL))
+		return 1;
+
+	target_ip = entry_ptr->target_ip;
+	target_port = entry_ptr->target_port;
+
+	if (odp_unlikely((!entry_ptr->valid) ||
+			 (entry_ptr->hash_value != hash_value))) {
+		return 1;
+	}
+
+	if (odp_unlikely(target_ip == 0))
+		return 0;
+
+	/* zero aging counter */
+	entry_ptr->counter = 0;
+	/* entry_ptr->reverse_nat_entry->counter = 0; */
+
+	do_snat(ipv4hdr, udphdr, target_ip, target_port, snat_ipv4.protocol);
 	return 0;
 }
 
-static inline void do_dnat(odph_ipv4hdr_t *ipv4hdr, odph_udphdr_t *udphdr,
-			   nat_entry_t *entry, uint8_t protocol)
-{
-	odph_icmphdr_t *icmphdr = (odph_icmphdr_t *)udphdr;
-	odph_tcphdr_t  *tcphdr = (odph_tcphdr_t *)udphdr;
-	/*
-	if (odp_unlikely(gbl_args->appl.debug_mode))
-		printf("Changing dst address from %08x to %08x\n",
-		       ipv4hdr->dst_addr, htonl(entry->target_ip));
-	*/
-	ipv4hdr->dst_addr = htonl(entry->target_ip);
-	ipv4hdr->chksum = 0;
-	switch (protocol) {
-	case ODPH_IPPROTO_UDP:
-		udphdr->dst_port = htons(entry->target_port);
-		udphdr->chksum = 0;
-		break;
-	case ODPH_IPPROTO_TCP:
-		tcphdr->dst_port = htons(entry->target_port);
-		tcphdr->cksm = 0;
-		break;
-	case ODPH_IPPROTO_ICMP:
-		icmphdr->un.echo.id = htons(entry->target_port);
-		icmphdr->chksum = 0;
-		icmphdr->chksum = ~net_cksum((uint8_t *)icmphdr,
-					     (ntohs(ipv4hdr->tot_len) -
-					     ODPH_IPV4HDR_LEN) >> 1);
-		break;
-	default:
-		break;
-	}
-}
-
-static inline int send_to_dnat(odp_packet_t pkt,
-			       nat_entry_t tbl[][NAT_TBL_DEPTH])
+static inline int send_to_dnat(odp_packet_t pkt)
 {
 	odph_ipv4hdr_t *ipv4hdr;
 	odph_udphdr_t  *udphdr;
-	uint32_t hash_value;
-	uint16_t ethtype;
+	uint32_t hash_value, target_ip;
+	uint16_t ethtype, target_port;
 	uint32_t l3_offset;
 	nat_entry_t cur_entry, *entry_ptr;
 	ipv4_5tuple_t ipv4;
@@ -1288,29 +1476,9 @@ static inline int send_to_dnat(odp_packet_t pkt,
 
 	hash_value = XXH32((void *)&ipv4, sizeof(ipv4_5tuple_t), NAT_HASH_SEED);
 
-	entry_ptr = find_hash_entry(tbl, hash_value, &ipv4);
-	if (entry_ptr != NULL) {
-		/* save the entry since working without read locks. the entry
-		 * can be removed from the table during packet modification */
-		memcpy(&cur_entry, entry_ptr, sizeof(nat_entry_t));
+	entry_ptr = find_hash_entry(gbl_args->dnat_tbl, hash_value, &ipv4);
 
-		if (odp_unlikely((!entry_ptr->valid) ||
-				 (entry_ptr->hash_value != hash_value)))
-			return 1;
-
-		/* zero aging counters */
-		entry_ptr->counter = 0;
-		if (odp_likely(entry_ptr->reverse_nat_entry != NULL))
-			entry_ptr->reverse_nat_entry->counter = 0;
-
-		if (odp_unlikely(gbl_args->appl.debug_mode)) {
-			printf("Found in dnat table: %08x %d %08x %d %d\n",
-			       ipv4.src_ip, ipv4.src_port, ipv4.dst_ip,
-			       ipv4.dst_port, ipv4.protocol);
-		}
-
-		do_dnat(ipv4hdr, udphdr, &cur_entry, ipv4.protocol);
-	} else {
+	if (odp_unlikely(entry_ptr == NULL)) {
 		if (odp_unlikely(gbl_args->appl.debug_mode))
 			printf("Not found in dnat table: %08x %d %08x %d %d\n",
 			       ipv4.src_ip, ipv4.src_port, ipv4.dst_ip,
@@ -1318,6 +1486,27 @@ static inline int send_to_dnat(odp_packet_t pkt,
 		return 1;
 	}
 
+	/* working without read locks. the entry can be removed from the table
+	 * during packet modification */
+	target_ip = entry_ptr->target_ip;
+	target_port = entry_ptr->target_port;
+
+	if (odp_unlikely((!entry_ptr->valid) ||
+			 (entry_ptr->hash_value != hash_value)))
+		return 1;
+
+	/* zero aging counters */
+	entry_ptr->counter = 0;
+	if (odp_likely(entry_ptr->reverse_nat_entry != NULL))
+		entry_ptr->reverse_nat_entry->counter = 0;
+
+	if (odp_unlikely(gbl_args->appl.debug_mode)) {
+		printf("Found in dnat table: %08x %d %08x %d %d\n",
+		       ipv4.src_ip, ipv4.src_port, ipv4.dst_ip,
+		       ipv4.dst_port, ipv4.protocol);
+	}
+
+	do_dnat(ipv4hdr, udphdr, target_ip, target_port, ipv4.protocol);
 	return 0;
 }
 
@@ -1398,80 +1587,62 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     printf("It is DATA_PLANE_FROM_LAN\n");
                 }
-		proceed = send_to_snat(pkt, gbl_args->snat_tbl);
+		proceed = send_to_snat(pkt, 0);
                 break;
             case DATA_PLANE_FROM_WAN:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     printf("It is DATA_PLANE_FROM_WAN\n");
                 }
-		proceed = send_to_dnat(pkt, gbl_args->dnat_tbl);
+		proceed = send_to_dnat(pkt);
                 break;
             case CONTROL_PLANE_TO_CPU_LAN:
-                if (odp_unlikely(gbl_args->appl.debug_mode)) {
-                    printf("It is CONTROL_PLANE_TO_CPU_LAN\n");
-                }
-                //check if additional NAT processing in required for control pkt
-                if (is_control_sent_to_nat(pkt)) {
-			if (odp_unlikely(gbl_args->appl.debug_mode)) {
-			    printf("Control packet should be sent to SNAT\n");
-			}
-			proceed = send_to_snat(pkt, gbl_args->snat_tbl);
-			//ref count doesn't exist in current ODP version
-			pkt_copy = odp_packet_copy(pkt, gbl_tap_pool);
-			if (odp_likely(pkt_copy != ODP_PACKET_INVALID)) {
-				res = process_tocpu_lan(pkt_copy);
-				if (odp_unlikely(res == 1)) {
-					odp_packet_free(pkt_copy);
-					if (odp_unlikely(gbl_args->appl.debug_mode))
-						printf("Control Plane packet dropped\n");
-				} else {
-					if (odp_unlikely(gbl_args->appl.debug_mode))
-						printf("Sent to Control Plane\n");
-				}
-			}
-                } else {
-			proceed = process_tocpu_lan(pkt);
+		if (odp_unlikely(gbl_args->appl.debug_mode))
+			printf("It is CONTROL_PLANE_TO_CPU_LAN\n");
+
+		if (supported_dsa_l3_pkt(pkt)) {
+			/* unknown pkt from the switch, learn it */
+			if (odp_unlikely(gbl_args->appl.debug_mode))
+				printf("Unknown pkt to CPU lan\n");
+
+			process_new_entry(pkt);
+			proceed = process_tocpu_lan(pkt, 0);
+		} else {
+			proceed = process_tocpu_lan(pkt, 1);
 		}
                 break;
             case CONTROL_PLANE_TO_CPU_WAN:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     printf("It is CONTROL_PLANE_TO_CPU_WAN\n");
-                }
-                //check if additional NAT processing in required for control pkt
-                if (is_control_sent_to_nat(pkt)) {
-			if (odp_unlikely(gbl_args->appl.debug_mode)) {
-			    printf("Control packet should be sent to DNAT\n");
-			}
-			proceed = send_to_dnat(pkt, gbl_args->dnat_tbl);
-			//ref count doesn't exist in current ODP version
-			pkt_copy = odp_packet_copy(pkt, gbl_tap_pool);
-			if (odp_likely(pkt_copy != ODP_PACKET_INVALID)) {
-				res = process_tocpu_wan(pkt_copy);
-				if (odp_unlikely(res == 1)) {
-					odp_packet_free(pkt_copy);
-					if (odp_unlikely(gbl_args->appl.debug_mode))
-						printf("Control Plane packet dropped\n");
-				} else {
-					if (odp_unlikely(gbl_args->appl.debug_mode))
-						printf("Sent to Control Plane\n");
-				}
-			} else
-				printf("Invalid packet copy\n");
-		} else {
-			proceed = process_tocpu_wan(pkt);
 		}
+		proceed = process_tocpu_wan(pkt, 1);
                 break;
             case CONTROL_PLANE_FROM_CPU_LAN:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     printf("It is CONTROL_PLANE_FROM_CPU_LAN\n");
                 }
-                proceed = process_fromcpu_lan(pkt);
+		proceed = process_fromcpu_lan(pkt);
                 break;
             case CONTROL_PLANE_FROM_CPU_WAN:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     printf("It is CONTROL_PLANE_FROM_CPU_WAN\n");
                 }
-                proceed = process_fromcpu_wan(pkt, pktio);
+		if (supported_l3_pkt(pkt)) {
+			if (odp_unlikely(gbl_args->appl.debug_mode))
+				printf("L3 pkt from tap WAN\n");
+
+			add_dsa_snat_fromcpu(pkt, pktio);
+			proceed = send_to_snat(pkt, 1);
+			if (proceed == 1) {
+				if (odp_unlikely(strip_dsa_hdr(pkt) == 1)) {
+					proceed = 1;
+				} else {
+					proceed = process_fromcpu_wan(pkt,
+								      pktio);
+				}
+			}
+		} else {
+			proceed = process_fromcpu_wan(pkt, pktio);
+		}
                 break;
             default:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
@@ -1816,41 +1987,50 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 	uint64_t pkts = 0;
 	uint64_t maximum_pps = 0;
 	uint64_t pkts_prev = 0;
-	int i;
+	uint32_t i;
 	int elapsed = 0;
 	int stats_enabled = 1;
 	int loop_forever = (duration == 0);
 	int dump_interval = 20;
 	int cur_chunk = 0;
 	uint16_t num_chunks = 512;
-	uint16_t chunk_size = NAT_TBL_SIZE / num_chunks;
-	int aging_start_idx;
-	int aging_end_idx;
+	uint32_t chunk_size = NAT_TBL_SIZE / num_chunks;
+	uint32_t aging_start_idx;
+	uint32_t aging_end_idx;
 	int passed_usec = 0;
 	int sleep_usec = 50;
 	struct timespec time1, time2;
 	int counter = 0;
 
-	if ((num_chunks * sleep_usec / 1000) > (int)gbl_args->appl.aging_time) {
-		num_chunks = gbl_args->appl.aging_time * 1000 / sleep_usec;
+	if (gbl_args->appl.aging_time == 0) {
+		aging_enable = 0;
+	} else {
+		if (num_chunks * sleep_usec < 1000)
+			sleep_usec = 1000 / num_chunks;
 
-		/* num_chunks should be a power of 2 and smaller than the
-			current value */
-		while (num_chunks >>= 1)
-			counter++;
+		if ((num_chunks * sleep_usec / 1000) >
+		    (int)gbl_args->appl.aging_time) {
+			num_chunks = gbl_args->appl.aging_time * 1000 /
+				sleep_usec;
 
-		if (counter > 0)
-			counter--;
+			/* num_chunks should be a power of 2 and smaller than
+			 * the current value */
+			while (num_chunks >>= 1)
+				counter++;
 
-		num_chunks = 2 << counter;
-	}
+			if (counter > 0)
+				counter--;
 
-	time1.tv_sec = 0;
-	time1.tv_nsec = sleep_usec * 1000000L;
+			num_chunks = 2 << counter;
+		}
 
-	if (NAT_TBL_SIZE % num_chunks != 0) {
-		printf("Error: invalid number of aging scan chunks\n");
-		return -1;
+		time1.tv_sec = sleep_usec / 1000;
+		time1.tv_nsec = (sleep_usec % 1000) * 1000000L;
+
+		if (NAT_TBL_SIZE % num_chunks != 0) {
+			printf("Error: invalid number of aging scan chunks\n");
+			return -1;
+		}
 	}
 
 	if (dump_interval <= 0)
@@ -2185,7 +2365,9 @@ static void usage(char *progname)
 		   "  -s, --dsa DSA tag mode\n"
            "  -l, --lan_vid <vid> DSA tag mode, LAN VID\n"
            "  -w, --wan_Vid VIDs(comma-separated, no spaces) DSA tag mode, WAN VIDs\n"
-	       "  -o, --aging time of DNAT entries in seconds (default is 300 seconds).\n"
+	       "  -o, --aging time for NAT entries in seconds (0 - 3600)\n"
+	       "		Default value is 300 seconds\n"
+	       "		0 - aging disabled\n"
 	       "  -c, --count <number> CPU count.\n"
 	       "  -a, --accuracy <number> Time in seconds get print statistics\n"
 	       "                          and aging task resolution\n"
@@ -2322,6 +2504,8 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 				appl_args->aging_time = MAX_AGING_TIME;
 				printf("Aging time is set to its maximum value = 3600\n");
 			}
+			if (appl_args->aging_time == 0)
+				printf("Aging disabled\n");
 			break;
 
 		case 's':
@@ -2360,6 +2544,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
                 tap_str += strlen(tap_str);
             }
             appl_args->if_wan_count = i;
+		appl_args->dsa_mode = 1;
             break;
 
 		case 'g':
@@ -2654,7 +2839,7 @@ int main(int argc, char *argv[])
 	}
 
 	ret = nat_aging_and_stats(num_workers, stats, gbl_args->appl.time,
-				gbl_args->appl.accuracy, ODP_NAT_AGING_ENABLE);
+				gbl_args->appl.accuracy, 1);
 
 	/* Master thread waits for other threads to exit */
 	for (i = 0; i < num_workers; ++i)
