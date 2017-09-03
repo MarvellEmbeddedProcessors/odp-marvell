@@ -1206,8 +1206,9 @@ static inline int learn_nat_entry(ipv4_5tuple_t snat_ipv4, uint32_t hash_value,
 		dnat_entry.target_port = snat_ipv4.src_port;
 		dnat_entry.reverse_nat_entry = snat_ptr;
 
-		dnat_hash_value = XXH32((void *)&dnat_ipv4,
-					sizeof(ipv4_5tuple_t), NAT_HASH_SEED);
+		dnat_hash_value = XXH_fast32((void *)&dnat_ipv4,
+					     sizeof(ipv4_5tuple_t),
+					     NAT_HASH_SEED);
 
 		odp_rwlock_write_lock(&gbl_args->dnat_lock);
 		dnat_ptr = add_hash_entry(gbl_args->dnat_tbl,
@@ -1294,7 +1295,8 @@ static inline int process_new_entry(odp_packet_t pkt)
 			return 1;
 	}
 
-	hash_value = XXH32((void *)&ipv4, sizeof(ipv4_5tuple_t), NAT_HASH_SEED);
+	hash_value = XXH_fast32((void *)&ipv4, sizeof(ipv4_5tuple_t),
+				NAT_HASH_SEED);
 
 	entry_ptr = find_hash_entry(gbl_args->snat_tbl, hash_value, &ipv4);
 	if (entry_ptr == NULL) {
@@ -1396,8 +1398,8 @@ static inline int send_to_snat(odp_packet_t pkt, uint8_t pkt_from_tap)
 		return 1;
 	}
 
-	hash_value = XXH32((void *)&snat_ipv4, sizeof(ipv4_5tuple_t),
-			   NAT_HASH_SEED);
+	hash_value = XXH_fast32((void *)&snat_ipv4, sizeof(ipv4_5tuple_t),
+				NAT_HASH_SEED);
 
 	entry_ptr = find_hash_entry(gbl_args->snat_tbl, hash_value, &snat_ipv4);
 
@@ -1474,7 +1476,8 @@ static inline int send_to_dnat(odp_packet_t pkt)
 	if (odp_unlikely(0 != build_hash_search_key(&ipv4, ipv4hdr, udphdr)))
 		return 1;
 
-	hash_value = XXH32((void *)&ipv4, sizeof(ipv4_5tuple_t), NAT_HASH_SEED);
+	hash_value = XXH_fast32((void *)&ipv4, sizeof(ipv4_5tuple_t),
+				NAT_HASH_SEED);
 
 	entry_ptr = find_hash_entry(gbl_args->dnat_tbl, hash_value, &ipv4);
 

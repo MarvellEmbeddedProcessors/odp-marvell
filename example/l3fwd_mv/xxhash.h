@@ -33,8 +33,8 @@
 #ifndef _XXHASH_H
 #define _XXHASH_H
 
-unsigned int XXH_small(const void* key, int len, unsigned int seed);
-unsigned int XXH_fast32(const void* input, int len, unsigned int seed);
-unsigned int XXH_strong32(const void* input, int len, unsigned int seed);
+unsigned int XXH_small(const void *key, int len, unsigned int seed);
+unsigned int XXH_fast32(const void *input, int len, unsigned int seed);
+unsigned int XXH_strong32(const void *input, int len, unsigned int seed);
 
 #endif
