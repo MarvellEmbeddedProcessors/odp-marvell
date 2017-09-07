@@ -161,8 +161,9 @@ struct crypto_request {
 	struct crypto_cio_info  *cio;
 };
 
-#define MAX_NUM_OF_THREADS            2
-#define MAX_NUM_OF_CIO_PER_WORKER     2
+#define MAX_NUM_OF_THREADS        4
+#define MAX_NUM_OF_CIO_PER_WORKER 2
+#define MAX_THREAD_ID             (MAX_NUM_OF_THREADS * 2)
 
 static uint8_t	used_cios[MAX_NUM_OF_CIO_PER_WORKER] = {MVSAM_CIOS_RSRV};
 
@@ -184,13 +185,16 @@ struct crypto_cio_info {
 
 struct crypto_thread_info
 {
+	unsigned int             used;
 	unsigned int             app_enqs_cnt;
 	struct crypto_cio_info   cio[2];
 
 };
 
-static struct crypto_thread_info crp_thread[MAX_NUM_OF_THREADS];   /* TODO: add dynamic allocation for this array*/
-struct crypto_session            sessions[MVSAM_MAX_NUM_SESSIONS];
+static struct crypto_thread_info  crp_thread[MAX_NUM_OF_THREADS];
+static struct crypto_thread_info *threads_p[MAX_THREAD_ID];
+struct crypto_session             sessions[MVSAM_MAX_NUM_SESSIONS];
+static odp_ticketlock_t           threads_lock;
 
 #endif /* ODP_PKTIO_MVSAM */
 
@@ -213,13 +217,28 @@ static inline struct crypto_cio_info* get_crp_thr_cio(struct crypto_thread_info 
 
 static inline struct crypto_thread_info *get_crp_thread(void)
 {
-	int thr_id = odp_thread_id() - 1;
-	if(odp_unlikely(thr_id > MAX_NUM_OF_THREADS)) {
+	int i;
+	int thr_id = odp_thread_id();
+
+	if (odp_unlikely(thr_id > MAX_THREAD_ID)) {
 		ODP_ERR("invalid thread id. thr_id=%d!\n", thr_id);
 		return NULL;
 	}
+	if (odp_likely(threads_p[thr_id] != NULL))
+		return threads_p[thr_id];
 
-	return &crp_thread[thr_id];
+	odp_ticketlock_lock(&threads_lock);
+	for (i = 0 ; i < MAX_NUM_OF_THREADS ; i++) {
+		if (!crp_thread[i].used) {
+			crp_thread[i].used = 1;
+			threads_p[thr_id] = &crp_thread[i];
+			odp_ticketlock_unlock(&threads_lock);
+			return threads_p[thr_id];
+		}
+	}
+	odp_ticketlock_unlock(&threads_lock);
+	ODP_ERR("can't find free thread entry!\n");
+	return NULL;
 }
 
 static int find_free_cio(int cio_local_idx)
@@ -441,7 +460,6 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 	if(odp_unlikely(crp_thr == NULL))
 		return -1;
 
-
 	/* TODO: temporary W/A for immediate flushing of the SAM IO Qs
 	 * until we support it correctly by timeouts */
 	if (!params)
@@ -608,6 +626,9 @@ static int mvsam_odp_crypto_init_global(void)
 		memset(crp_thread[i].cio[0].sam_op_params, 0, sizeof(struct sam_cio_op_params));
 		memset(crp_thread[i].cio[1].sam_op_params, 0, sizeof(struct sam_cio_op_params));
 	}
+
+	odp_ticketlock_init(&threads_lock);
+
 	return err;
 }
 
