@@ -798,27 +798,6 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 	}
 
 	hif = get_hif(get_thr_id());
-	err = get_link_info(pktio_entry->s.name, &info);
-	if (err != 0) {
-		ODP_ERR("Can't get parameters from link %s!\n",
-			pktio_entry->s.name);
-		return -1;
-	}
-
-	if (info.speed == 10000)
-		rx_queue_size = MVPP2_RXQ_SIZE_10G;
-	else
-		rx_queue_size = MVPP2_RXQ_SIZE_1G;
-
-	pool = pktio_entry->s.pkt_mvpp2.pool;
-	pool_entry_t *poole = get_pool_entry(pool_handle_to_index(pool));
-
-	if (!pktio_entry->s.num_in_queue)
-		buf_num = poole->s.buf_num / ODP_CONFIG_PKTIO_ENTRIES;
-	else
-		buf_num = MIN((poole->s.buf_num / ODP_CONFIG_PKTIO_ENTRIES),
-			      (pktio_entry->s.num_in_queue * rx_queue_size));
-
 	if (!pktio_entry->s.pkt_mvpp2.ppio) {
 		port_desc.name = pktio_entry->s.name;
 		err = find_port_info(&port_desc);
@@ -848,6 +827,18 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 			port_params.eth_start_hdr);
 		ODP_DBG("hash_type %d\n", port_params.inqs_params.hash_type);
 
+		err = get_link_info(pktio_entry->s.name, &info);
+		if (err != 0) {
+			ODP_ERR("Can't get parameters from link %s!\n",
+				pktio_entry->s.name);
+			return -1;
+		}
+
+		if (info.speed == 10000)
+			rx_queue_size = MVPP2_RXQ_SIZE_10G;
+		else
+			rx_queue_size = MVPP2_RXQ_SIZE_1G;
+
 		port_params.inqs_params.num_tcs = MVPP2_MAX_NUM_TCS_PER_PORT;
 		for (i = 0; i < port_params.inqs_params.num_tcs; i++) {
 			tcs_params = &port_params.inqs_params.tcs_params[i];
@@ -875,23 +866,33 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 			return -1;
 		}
 
+		pool = pktio_entry->s.pkt_mvpp2.pool;
+		pool_entry_t *poole =
+			get_pool_entry(pool_handle_to_index(pool));
+
+		if (!pktio_entry->s.num_in_queue)
+			buf_num = poole->s.buf_num / ODP_CONFIG_PKTIO_ENTRIES;
+		else
+			buf_num = MIN((poole->s.buf_num /
+				      ODP_CONFIG_PKTIO_ENTRIES),
+				      (pktio_entry->s.num_in_queue *
+				      rx_queue_size));
+
+		/* Allocate maximum sized packets */
+		/* Allocate 'buf_num' of the SW pool into the HW pool;
+		* i.e. allow only several ports sharing the same SW pool
+		*/
+		err = fill_bpool(pktio_entry->s.pkt_mvpp2.pool,
+				 pktio_entry->s.pkt_mvpp2.bpool, hif,
+				 buf_num, pktio_entry->s.pkt_mvpp2.mtu);
+		if (err != 0) {
+			ODP_ERR("can't fill port pool with buffs!\n");
+			return -1;
+		}
 		pktio_entry->s.ops->stats_reset(pktio_entry);
 	}
 
 	pp2_ppio_set_loopback(pktio_entry->s.pkt_mvpp2.ppio, pktio_entry->s.config.enable_loop);
-
-	/* Allocate maximum sized packets */
-	/* Allocate 'buf_num' of the SW pool into the HW pool;
-	 * i.e. allow only several ports sharing the same SW pool
-	 */
-	err = fill_bpool(pktio_entry->s.pkt_mvpp2.pool,
-			 pktio_entry->s.pkt_mvpp2.bpool, hif,
-			 buf_num, pktio_entry->s.pkt_mvpp2.mtu);
-	if (err != 0) {
-		ODP_ERR("can't fill port pool with buffs!\n");
-		return -1;
-	}
-
 	pp2_ppio_enable(pktio_entry->s.pkt_mvpp2.ppio);
 
 	ODP_PRINT("PktIO PP2 has %d RxTCs and %d TxTCs\n",
