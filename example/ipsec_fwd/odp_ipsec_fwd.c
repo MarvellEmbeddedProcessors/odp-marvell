@@ -1593,7 +1593,9 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 		if (pkts < 1) {
 			empty_rx_counters++;
 			if ( empty_rx_counters > EMPTY_RX_THRESHOULD ) {
+#ifdef ODP_PKTIO_MVSAM
 				odp_crypto_operation(NULL, NULL, NULL);
+#endif
 				empty_rx_counters = 0;
 				crypto_rx_handler(worker_id);
 			}
@@ -1610,8 +1612,9 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	for (i = 0 ; i < CRYPTO_CLEAN_RING_REP ; i++) {
 		int crypto_pkts;
 		int worker_id = WORKER_ID_GET();
-
+#ifdef ODP_PKTIO_MVSAM
 		odp_crypto_operation(NULL, NULL, NULL);
+#endif
 		usleep(CRYPTO_CLEAN_TIME_OUT_MSEC * 1000);
 		crypto_pkts = odp_queue_deq_multi(
 			completionq[CRYPTO_QUEUE_INBOUND_INDEX][worker_id],
