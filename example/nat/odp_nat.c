@@ -2018,6 +2018,7 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 	uint64_t pkts_prev = 0;
 	uint32_t i;
 	int elapsed = 0;
+	int print_counter = 0;
 	int stats_enabled = 1;
 	int loop_forever = (duration == 0);
 	int dump_interval = 20;
@@ -2093,6 +2094,7 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 			if (odp_unlikely(passed_usec >= timeout * 1000)) {
 				passed_usec = 0;
 				elapsed += timeout;
+				++print_counter;
 
 				if (stats_enabled)
 					pkts = print_stats(num_workers,
@@ -2100,16 +2102,18 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 							   timeout,
 							   &pkts_prev,
 							   &maximum_pps);
-			}
-
-			if (odp_unlikely((gbl_args->appl.print_table == 1) &&
-					 (elapsed % dump_interval == 0))) {
-				print_nat_table(gbl_args->snat_tbl,
-						NAT_TBL_SIZE, NAT_TBL_DEPTH,
-						"SNAT Table Dump");
-				print_nat_table(gbl_args->dnat_tbl,
-						NAT_TBL_SIZE, NAT_TBL_DEPTH,
-						"DNAT Table Dump");
+				if (odp_unlikely((gbl_args->appl.print_table ==
+				    1) && (print_counter == 10))) {
+					print_counter = 0;
+					print_nat_table(gbl_args->snat_tbl,
+							NAT_TBL_SIZE,
+							NAT_TBL_DEPTH,
+							"SNAT Table Dump");
+					print_nat_table(gbl_args->dnat_tbl,
+							NAT_TBL_SIZE,
+							NAT_TBL_DEPTH,
+							"DNAT Table Dump");
+				}
 			}
 		} else {
 			sleep(timeout);
