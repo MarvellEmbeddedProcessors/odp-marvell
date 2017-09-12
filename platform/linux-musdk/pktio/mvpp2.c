@@ -281,7 +281,7 @@ static inline void mvpp2_free_sent_buffers(struct pp2_hif *hif,
 			pp2_bpool_put_buff(hif, entry->bpool, &entry->buff);
 		else {
 			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
-			odp_packet_free_multi(&pkt, 1);
+			odp_packet_free(pkt);
 		}
 	}
 #else
@@ -296,7 +296,7 @@ static inline void mvpp2_free_sent_buffers(struct pp2_hif *hif,
 
 		if (unlikely(!entry->bpool)) {
 			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
-			odp_packet_free_multi(&pkt, 1);
+			odp_packet_free(pkt);
 			skip_bufs = 1;
 			goto skip_buf;
 		}
