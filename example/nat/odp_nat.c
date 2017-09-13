@@ -2697,15 +2697,13 @@ int main(int argc, char *argv[])
 	odp_init_params.worker_cpus = &worker_cpu_mask;
 	odp_init_params.control_cpus = &control_cpu_mask;
 
-	if (signal(SIGINT, sig_int_handler) != 0) {
-		printf("Error: register to SIGINT failed\n");
-		exit(EXIT_FAILURE);
-	}
+	if (signal(SIGINT, sig_int_handler) != 0)
+		printf("WARNING: register to SIGINT failed. Application "
+		       "may not close correctly and may fail on restart\n");
 
-	if (signal(SIGTERM, sig_int_handler) != 0) {
-		printf("Error: register to SIGTERM failed\n");
-		exit(EXIT_FAILURE);
-	}
+	if (signal(SIGTERM, sig_int_handler) != 0)
+		printf("WARNING: register to SIGINT failed. Application "
+		       "may not close correctly and may fail on restart\n");
 
 	/* Init ODP before calling anything else */
 	if (odp_init_global(&instance, &odp_init_params, NULL)) {
