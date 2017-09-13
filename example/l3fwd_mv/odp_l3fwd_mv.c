@@ -1253,15 +1253,13 @@ int main(int argc, char **argv)
 	odp_cpumask_t worker_cpu_mask;
 	odp_cpumask_t control_cpu_mask;
 
-	if (signal(SIGINT, sig_int_handler) != 0) {
-		printf("Error: register to SIGINT failed\n");
-		exit(EXIT_FAILURE);
-	}
+	if (signal(SIGINT, sig_int_handler) != 0)
+		printf("WARNING: register to SIGINT failed. Application "
+		       "may not close correctly and may fail on restart\n");
 
-	if (signal(SIGTERM, sig_int_handler) != 0) {
-		printf("Error: register to SIGTERM failed\n");
-		exit(EXIT_FAILURE);
-	}
+	if (signal(SIGTERM, sig_int_handler) != 0)
+		printf("WARNING: register to SIGINT failed. Application "
+		       "may not close correctly and may fail on restart\n");
 
 	memset(&odp_init_params, 0, sizeof(odp_init_params));
 	odp_cpumask_zero(&control_cpu_mask);
