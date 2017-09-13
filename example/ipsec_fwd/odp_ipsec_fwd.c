@@ -1946,23 +1946,21 @@ main(int argc, char *argv[])
 	schedule = odp_schedule_cb;
 #ifdef IPSEC_DEBUG_SIG
 	if(signal(SIGUSR1, sig_usr) != 0)
-		printf("error while register to SIGUSR1. %s\n",
-		       strerror(errno));
+		printf("WARNING: register to SIGINT failed. Application "
+		       "may not close correctly and may fail on restart\n");
 	if(signal(SIGUSR2, sig_usr) != 0)
-		printf("error while register to SIGUSR2. %s\n",
-		       strerror(errno));
+		printf("WARNING: register to SIGINT failed. Application "
+		       "may not close correctly and may fail on restart\n");
 #endif
 
 	if (signal(SIGINT, sig_int) != 0) {
-		printf("error while register to SIGINT. %s\n",
+		printf("Warning: failed to register SIGINT signal. %s\n",
 		       strerror(errno));
-		exit(EXIT_FAILURE);
 	}
 
 	if (signal(SIGTERM, sig_int) != 0) {
-		printf("error while register to SIGTERM. %s\n",
+		printf("Warning: failed to register SIGTERM signal. %s\n",
 		       strerror(errno));
-		exit(EXIT_FAILURE);
 	}
 
 	/* check for using poll queues */
