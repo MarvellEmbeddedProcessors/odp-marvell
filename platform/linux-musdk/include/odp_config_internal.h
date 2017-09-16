@@ -1,0 +1,202 @@
+/* Copyright (c) 2016, Linaro Limited
+ * Copyright (c) 2016, Marvell International Ltd.
+ * All rights reserved.
+ *
+ * SPDX-License-Identifier:     BSD-3-Clause
+ */
+
+#ifndef ODP_CONFIG_INTERNAL_H_
+#define ODP_CONFIG_INTERNAL_H_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* MUSDK - start */
+/* Take compilation flags from the included musdk_lib */
+#include <env/mv_autogen_comp_flags.h>
+
+/* TODO: MUSDK: get rid of the following lines and make them generic. */
+#define MVPP2_TOTAL_NUM_HIFS	9
+#define MVPP2_TOTAL_NUM_BPOOLS	16
+
+#define MVPP2_BUFFER_OFFSET	0
+#define MVPP2_PACKET_OFFSET	64
+#define MVPP2_MH_SIZE		2
+#define MVPP2_HIF_RSRV		0xF
+#define MVPP2_BPOOL_RSRV	0x7
+
+#define MVPP2_MAX_NUM_TCS_PER_PORT	1
+/* TODO: temporary set num-RxQs-per-tc according to #cores */
+#define MVPP2_MAX_NUM_QS_PER_TC		4
+#define MVPP2_RXQ_SIZE_10G      4096
+#define MVPP2_RXQ_SIZE_1G       2048
+#define MVPP2_TXQ_SIZE			2048
+#define MVPP2_DFLT_MTU			1500
+
+#define MVPP2_MAX_RX_BURST_SIZE		256
+#define MVPP2_MAX_TX_BURST_SIZE		256
+
+#define MVSAM_TOTAL_NUM_CIOS	4
+
+/* TODO: reserve some rings for the LK */
+#define MVSAM_CIOS_RSRV		0x0
+#define MVSAM_RING_SIZE		256
+#define MVSAM_MAX_NUM_SESSIONS	32
+#define MVSAM_MULTI_SAM_ASYMMETRIC_MODE
+
+/*
+ * Total size of shared (CMA) memory for ODP use
+ */
+#define MUSDK_TOTAL_SHM_SIZE		(200 * 1024 * 1024)
+/* MUSDK - end */
+
+/*
+ * Maximum number of pools
+ * Increase from 4 to 20 for OFP support
+ */
+#define ODP_CONFIG_POOLS 20
+
+/*
+ * Maximum number of queues
+ * Decrease from 1024 to 256 to reduce memory usage for OFP support
+ */
+#define ODP_CONFIG_QUEUES 256
+
+/*
+ * Maximum number of ordered locks per queue
+ */
+#define CONFIG_QUEUE_MAX_ORD_LOCKS 4
+
+/*
+ * Maximum number of packet IO resources
+ */
+#define ODP_CONFIG_PKTIO_ENTRIES 4
+
+/*
+ * Minimum buffer alignment
+ *
+ * This defines the minimum supported buffer alignment. Requests for values
+ * below this will be rounded up to this value.
+ */
+#define ODP_CONFIG_BUFFER_ALIGN_MIN 64
+
+/*
+ * Linux Generic implementation use 'ODP_CONFIG_BUFFER_ALIGN_MIN' for
+ * data section alignment and not for buffer alignment.
+ * This is a workaround for this issue
+ */
+#define ODP_CONFIG_BUFFER_ALIGNMENT
+
+/*
+ * Maximum buffer alignment
+ *
+ * This defines the maximum supported buffer alignment. Requests for values
+ * above this will fail.
+ */
+#define ODP_CONFIG_BUFFER_ALIGN_MAX (4 * 1024)
+
+/*
+ * Offset relative to the beginning of data, is used internally by hardware.
+ */
+#define ODP_CONFIG_BUFFER_OFFSET    (MVPP2_BUFFER_OFFSET)
+
+/*
+ * Default packet headroom
+ *
+ * This defines the minimum number of headroom bytes that newly created packets
+ * have by default. The default apply to both ODP packet input and user
+ * allocated packets. Implementations may reserve a larger than minimum headroom
+ * size e.g. due to HW or a protocol specific alignment requirement.
+ *
+ * @internal In odp-linux implementation:
+ * The default value (66) allows a 1500-byte packet to be received into a single
+ * segment with Ethernet offset alignment and room for some header expansion.
+ *      ------------------------------------------------------------------------
+ * HW:  | PacketOffset(32B*N, N>=1)             |Marvell Header(2B)| data      |
+ *      ------------------------------------------------------------------------
+ *
+ *      ------------------------------------------------------------------------
+ * ODP: |32B(HW buffer offset) | headroom size                     | data      |
+ *      ------------------------------------------------------------------------
+ */
+#define CONFIG_PACKET_HEADROOM ((MVPP2_PACKET_OFFSET) +\
+	(MVPP2_MH_SIZE) - ODP_CONFIG_BUFFER_OFFSET)
+
+/*
+ * Default packet tailroom
+ *
+ * This defines the minimum number of tailroom bytes that newly created packets
+ * have by default. The default apply to both ODP packet input and user
+ * allocated packets. Implementations are free to add to this as desired
+ * without restriction. Note that most implementations will automatically
+ * consider any unused portion of the last segment of a packet as tailroom
+ */
+#define CONFIG_PACKET_TAILROOM 0
+
+/*
+ * Maximum number of segments per packet
+ */
+#define CONFIG_PACKET_MAX_SEGS 6
+
+/*
+ * Maximum packet segment size including head- and tailrooms
+ */
+#define CONFIG_PACKET_SEG_SIZE (9 * 1024)
+
+/* Maximum data length in a segment
+ *
+ * The user defined segment length (seg_len in odp_pool_param_t) must not
+ * be larger than this.
+*/
+#define CONFIG_PACKET_MAX_SEG_LEN  (CONFIG_PACKET_SEG_SIZE - \
+				    CONFIG_PACKET_HEADROOM - \
+				    CONFIG_PACKET_TAILROOM)
+
+/*
+ * Minimum packet segment length
+ *
+ * This defines the minimum packet segment buffer length in bytes. The user
+ * defined segment length (seg_len in odp_pool_param_t) will be rounded up into
+ * this value.
+ */
+#define CONFIG_PACKET_SEG_LEN_MIN CONFIG_PACKET_MAX_SEG_LEN
+
+/* Maximum number of shared memory blocks.
+ *
+ * This the the number of separate SHM areas that can be reserved concurrently
+ */
+#define ODP_CONFIG_SHM_BLOCKS (ODP_CONFIG_POOLS + 48)
+
+/*
+ * Maximum event burst size
+ *
+ * This controls the burst size on various enqueue, dequeue, etc calls. Large
+ * burst size improves throughput, but may degrade QoS (increase latency).
+ */
+#define CONFIG_BURST_SIZE 16
+
+/*
+ * Maximum number of events in a pool
+ */
+#define CONFIG_POOL_MAX_NUM (1 * 1024 * 1024)
+
+/*
+ * Maximum number of events in a thread local pool cache
+ */
+#define CONFIG_POOL_CACHE_SIZE 256
+
+/*
+ * Size of the virtual address space pre-reserver for ISHM
+ *
+ * This is just virtual space preallocation size, not memory allocation.
+ * This address space is used by ISHM to map things at a common address in
+ * all ODP threads (when the _ODP_ISHM_SINGLE_VA flag is used).
+ * In bytes.
+ */
+#define ODP_CONFIG_ISHM_VA_PREALLOC_SZ (536870912L)
+#ifdef __cplusplus
+}
+#endif
+
+#endif

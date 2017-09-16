@@ -1,0 +1,76 @@
+Copyright (c) 2016, Linaro Limited
+Copyright (c) 2016, ENEA
+Copyright (c) 2016, Marvell International Ltd.
+
+All rights reserved.
+
+SPDX-License-Identifier:     BSD-3-Clause
+
+1. Intro
+
+OpenDataPlane implementation for Armada 7k/8k SoC's.
+Current version supports HW buffer manager, TX/RX queues, Packet IO (no Crypto API
+supported). This drop does not target high performance. It is rather proof of
+ODP API pktio functionality. It still uses linux-generic's SW scheduler.
+
+2. ODP build-time dependecies
+
+ODP-MUSDK is based on Marvell User-Space SDK (MUSDK) library.
+
+Please refer to the doc/ directory in MUSDK library for instructions about MUSDK library and its
+dependencies:
+
+3. ODP build
+
+  3.1 Packages
+
+The following packages may be needed:
+- gcc-aarch64-linux-gnu
+- g++-aarch64-linux-gnu
+
+  3.2 Build process
+
+ - ./bootstrap
+ - ./configure --host=aarch64-linux-gnu --prefix=<odp-install-path> --with-openssl-path=<open-ssl-install-path> --with-platform=linux-musdk
+        --with-sdk-install-path=<musdk-install-path> --enable-mvpp2-support  --enable-static --disable-shared
+ - make
+ - make install
+
+4. ODP run-time dependencies
+
+  4.1 U-boot
+
+Sources:            TBD
+Tag:                TBD
+config:             TBD
+Build instructions: TBD
+
+  4.3 Linux kernel
+
+Sources: TBD
+Tag:     TBD
+config:  TBD
+DTB:     TBD
+
+Current ODP implementation can co-exist with Ethernet slow path implementation
+if this has been patched for CPU0 isolation.
+
+TODO: Add here references to patch location
+
+The Packet Processor resources are statically shared between Linux slow path
+driver and ODP implementation (build time configuration).
+
+TODO: We have to specify here if the ODP-MUSDK should be used differently if
+the slow path is active or not
+
+
+  4.3 MUSDK
+
+Parts are built along with McSDK libraries (see item #2.1 of this instruction)
+
+- MUSDK library
+- UIO & pp2_tmp kernel module
+
+4. Limitations
+
+Cripto and classifer API are not implemented
