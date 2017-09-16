@@ -23,6 +23,9 @@ static inline void odp_cpu_pause(void)
 	__asm volatile("isb" ::: "memory");
 }
 
+#define __arch_prefetch(_p) \
+	__asm volatile("prfm pldl1keep, %a0\n" : : "p" (_p))
+
 #ifdef __cplusplus
 }
 #endif

@@ -33,6 +33,9 @@ extern "C" {
 #include <odp_schedule_if.h>
 #include <stddef.h>
 
+#define MV_NETMAP_BUF_ZERO_COPY
+#define MV_MUSDK_FREE_BUF_SUPPORT
+
 typedef union odp_buffer_bits_t {
 	odp_buffer_t             handle;
 
@@ -46,19 +49,45 @@ typedef union odp_buffer_bits_t {
 	};
 } odp_buffer_bits_t;
 
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+struct odp_netmap_buf_info {
+	void			*orig_buf;
+	uint32_t		 orig_size;
+	uint16_t		 orig_num_segs;
+	uint16_t		 data_offs;
+	struct netmap_ring	*ring;
+	uint32_t		 buf_idx;	/* buffer index */
+};
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 #define BUFFER_BURST_SIZE    CONFIG_BURST_SIZE
 
 /* Common buffer header */
 struct odp_buffer_hdr_t {
 	/* Handle union */
 	odp_buffer_bits_t handle;
+	/* Pool handle */
+	odp_pool_t pool_hdl;
+	/* Max data size */
+	uint32_t  size;
+	/* Segment count */
+	uint8_t   segcount;
+	/* Segments */
+	struct {
+		void     *hdr;
+		uint8_t  *data;
+		uint32_t  len;
+	} seg[CONFIG_PACKET_MAX_SEGS];
 
 	/* Initial buffer data pointer and length */
 	uint8_t  *base_data;
 	uint8_t  *buf_end;
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+	struct odp_netmap_buf_info	netmap_buf_inf;
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+	int			(*ext_buf_free_cb)(odp_buffer_t buf);
+#endif
 
-	/* Max data size */
-	uint32_t  size;
 
 	/* Pool type */
 	int8_t    type;
@@ -67,15 +96,7 @@ struct odp_buffer_hdr_t {
 	uint8_t   burst_num;
 	uint8_t   burst_first;
 
-	/* Segment count */
-	uint8_t   segcount;
 
-	/* Segments */
-	struct {
-		void     *hdr;
-		uint8_t  *data;
-		uint32_t  len;
-	} seg[CONFIG_PACKET_MAX_SEGS];
 
 	/* Next buf in a list */
 	struct odp_buffer_hdr_t *next;
@@ -104,8 +125,6 @@ struct odp_buffer_hdr_t {
 	 * offset has to be used */
 	uint64_t ipc_data_offset;
 
-	/* Pool handle */
-	odp_pool_t pool_hdl;
 
 	/* Data or next header */
 	uint8_t data[0];

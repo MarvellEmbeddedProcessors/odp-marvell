@@ -183,6 +183,38 @@ static inline void packet_set_len(odp_packet_hdr_t *pkt_hdr, uint32_t len)
 	pkt_hdr->frame_len = len;
 }
 
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+static inline int is_packet_buf_ext(odp_packet_t pkt)
+{
+	return is_ext_buffer(&odp_packet_hdr(pkt)->buf_hdr);
+}
+
+static inline void packet_ext_buf_swap(odp_packet_t		pkt,
+				       void			*buf,
+				       uint16_t			size,
+				       struct netmap_ring	*ring,
+				       uint32_t			buf_idx,
+				       uint16_t			data_offs)
+{
+	seg_swap_ext_buf(&odp_packet_hdr(pkt)->buf_hdr,
+			 buf,
+			 size,
+			 ring,
+			 buf_idx,
+			 data_offs);
+}
+
+static inline void packet_orig_buf_swap(odp_packet_t		pkt,
+					struct netmap_ring	**ring,
+					uint32_t		*buf_idx,
+					uint16_t		*data_offs)
+{
+	seg_swap_orig_buf(&odp_packet_hdr(pkt)->buf_hdr,
+			  ring,
+			  buf_idx,
+			  data_offs);
+}
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
 /* Forward declarations */
 int _odp_packet_copy_md_to_packet(odp_packet_t srcpkt, odp_packet_t dstpkt);
 

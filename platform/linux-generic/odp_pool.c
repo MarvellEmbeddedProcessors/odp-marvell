@@ -47,6 +47,10 @@ typedef struct pool_local_t {
 pool_table_t *pool_tbl;
 static __thread pool_local_t local;
 
+#ifdef MV_NETMAP_BUF_ZERO_COPY
+int (*ext_buf_free_cb)(odp_buffer_t buf) = NULL;
+#endif /* MV_NETMAP_BUF_ZERO_COPY */
+
 static inline odp_pool_t pool_index_to_handle(uint32_t pool_idx)
 {
 	return _odp_cast_scalar(odp_pool_t, pool_idx);
@@ -246,10 +250,17 @@ static void init_buffers(pool_t *pool)
 			data = pkt_hdr->data;
 
 		offset = pool->headroom;
+#ifdef ODP_CONFIG_BUFFER_ALIGNMENT
+		offset = 0;
+#endif /* ODP_CONFIG_BUFFER_ALIGNMENT */
 
 		/* move to correct align */
 		while (((uintptr_t)&data[offset]) % pool->align != 0)
 			offset++;
+
+#ifdef ODP_CONFIG_BUFFER_ALIGNMENT
+		offset += pool->headroom;
+#endif /* ODP_CONFIG_BUFFER_ALIGNMENT */
 
 		memset(buf_hdr, 0, (uintptr_t)data - (uintptr_t)buf_hdr);
 
@@ -277,6 +288,9 @@ static void init_buffers(pool_t *pool)
 
 		buf_hdl = form_buffer_handle(pool->pool_idx, i);
 		buf_hdr->handle.handle = buf_hdl;
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+		buf_hdr->ext_buf_free_cb = NULL;
+#endif
 
 		/* Store buffer into the global pool */
 		ring_enq(ring, mask, (uint32_t)(uintptr_t)buf_hdl);
@@ -748,11 +762,33 @@ void buffer_free_multi(const odp_buffer_t buf[], int num_total)
 		/* 'num' buffers are from the same pool */
 		if (num_total > 1) {
 			for (i = first; i < num_total; i++)
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+			{
+				odp_buffer_hdr_t *buf_hdr =
+					buf_hdl_to_hdr(buf[i]);
+				if (buf_hdr->ext_buf_free_cb &&
+				    !buf_hdr->ext_buf_free_cb(buf[i])) {
+				    /* Skip this buff */
+					i++;
+					break;
+				}
+#endif /* MV_NETMAP_BUF_ZERO_COPY || MV_MUSDK_FREE_BUF_SUPPORT */
 				if (pool_id != pool_id_from_buf(buf[i]))
 					break;
-
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+			}
+#endif /* MV_NETMAP_BUF_ZERO_COPY || MV_MUSDK_FREE_BUF_SUPPORT */
 			num = i - first;
 		}
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+		else {
+			odp_buffer_hdr_t *buf_hdr =
+				buf_hdl_to_hdr(buf[0]);
+			if (buf_hdr->ext_buf_free_cb &&
+			    !buf_hdr->ext_buf_free_cb(buf[0]))
+			 return;
+		}
+#endif /* MV_NETMAP_BUF_ZERO_COPY || MV_MUSDK_FREE_BUF_SUPPORT */
 
 		buffer_free_to_pool(pool_id, &buf[first], num);
 

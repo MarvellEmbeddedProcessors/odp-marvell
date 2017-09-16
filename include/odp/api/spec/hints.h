@@ -77,7 +77,11 @@ extern "C" {
 /**
  * Cache prefetch address
  */
+#ifdef __arch_prefetch
+#define odp_prefetch(x)		__arch_prefetch(x)
+#else
 #define odp_prefetch(x)         __builtin_prefetch((x), 0, 3)
+#endif /* __arch_prefetch */
 
 /**
  * Cache prefetch address for storing

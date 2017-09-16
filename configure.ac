@@ -169,6 +169,11 @@ then
     m4_include([./platform/linux-generic/m4/configure.m4])
     m4_include([./test/linux-generic/m4/configure.m4])
     IMPLEMENTATION_NAME="odp-linux"
+elif test "${with_platform}" == "linux-musdk";
+then
+    m4_include([./platform/linux-musdk/m4/configure.m4])
+    m4_include([./test/linux-musdk/m4/configure.m4])
+    IMPLEMENTATION_NAME="odp-musdk"
 else
     echo "UNSUPPORTED PLATFORM: ${with_platform}"
     exit 1
@@ -212,6 +217,7 @@ AC_SUBST([testdir])
 AM_CONDITIONAL([netmap_support], [test x$netmap_support = xyes ])
 AM_CONDITIONAL([PKTIO_DPDK], [test x$pktio_dpdk_support = xyes ])
 AM_CONDITIONAL([HAVE_PCAP], [test $have_pcap = yes])
+AM_CONDITIONAL([ODP_PKTIO_MVPP2], [test $pktio_mvpp2_support = yes])
 AM_CONDITIONAL([SDK_INSTALL_PATH_], [test "x${SDK_INSTALL_PATH_}" = "x1"])
 AM_CONDITIONAL([test_installdir], [test "$testdir" != ""])
 AM_CONDITIONAL([cunit_support], [test x$cunit_support = xyes ])
@@ -306,6 +312,19 @@ AC_ARG_ENABLE([deprecated],
 	deprecated=yes
     fi])
 AC_SUBST(ODP_DEPRECATED_API)
+
+##########################################################################
+# Enable/disable ODP_L3FWD_5TUPLE
+##########################################################################
+ODP_L3FWD_5TUPLE=0
+AC_ARG_ENABLE([l3fwd-5tuple],
+    [  --enable-l3fwd-5tuple    display debugging information],
+    [if test "x$enableval" = "xyes"; then
+	ODP_L3FWD_5TUPLE=1
+     else
+	ODP_L3FWD_5TUPLE=0
+    fi])
+ODP_CFLAGS="$ODP_CFLAGS -DODP_L3FWD_5TUPLE=$ODP_L3FWD_5TUPLE"
 
 ##########################################################################
 # Default warning setup

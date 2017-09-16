@@ -166,7 +166,11 @@ static inline odp_packet_seg_t _odp_packet_next_seg(odp_packet_t pkt,
 static inline void _odp_packet_prefetch(odp_packet_t pkt, uint32_t offset,
 					uint32_t len)
 {
-	(void)pkt; (void)offset; (void)len;
+	char *ptr = (char *)_odp_packet_data(pkt) + offset;
+
+	odp_prefetch(ptr);
+	if (len > 64)
+		odp_prefetch(ptr + 64);
 }
 
 /* Include inlined versions of API functions */
