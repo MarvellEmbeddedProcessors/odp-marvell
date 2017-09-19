@@ -985,15 +985,16 @@ void buffer_free_multi(uint32_t pool_id,
 	odp_buffer_hdr_t *buf_hdr[num_free];
 	int multi_pool = 0;
 
+#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
+	for (i = 0; i < num_free; i++)
+		buffer_free(pool_id_from_buf(buf[i]), buf[i]);
+	return;
+#endif /* MV_NETMAP_BUF_ZERO_COPY || MV_MUSDK_FREE_BUF_SUPPORT */
+
 	for (i = 0; i < num_free; i++) {
 		uint32_t id;
 
 		buf_hdr[i] = odp_buf_to_hdr(buf[i]);
-
-#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
-		if (buf_hdr[i]->ext_buf_free_cb && (!buf_hdr[i]->ext_buf_free_cb(buf[i])))
-			continue;
-#endif /* MV_NETMAP_BUF_ZERO_COPY || MV_MUSDK_FREE_BUF_SUPPORT */
 		ODP_ASSERT(buf_hdr[i]->allocator != ODP_FREEBUF);
 		buf_hdr[i]->allocator = ODP_FREEBUF;
 		id = pool_handle_to_index(buf_hdr[i]->pool_hdl);
