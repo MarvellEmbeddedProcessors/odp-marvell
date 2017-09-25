@@ -738,7 +738,6 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
     odp_nat_pktio_t pktio;
     odph_dsa_t   dsaFill;
     odph_ethaddr_t macaddr[2];
-    int tx_idx;
 
     memset(&dsaFill, 0,sizeof(odph_dsa_t));
     /* bit[31,30]:11 (forward), bit[28:24]:01000 (src_dev) */
@@ -749,12 +748,10 @@ static int process_fromcpu_wan(odp_packet_t pkt, odp_nat_pktio_t* rx_pktio)
     dsaFill.word1_byte3 = 0x20;
     dsaFill.vid  = htons((1 << 12) | gbl_args->appl.wan_vid[rx_pktio->rx_idx - gbl_args->appl.if_phy_count - 1]);
 
-    tx_idx = gbl_args->appl.if_phy_count - 1;
-
-    pktio.tx_idx = tx_idx;
-    pktio.pktout = gbl_args->pktios[tx_idx].pktout[0];
-    pktio.tx_queue = gbl_args->pktios[tx_idx].tx_q[0];
-    pktio.tx_pktio =gbl_args->pktios[tx_idx].pktio;
+	pktio.tx_idx = 0;
+	pktio.pktout = gbl_args->pktios[0].pktout[0];
+	pktio.tx_queue = gbl_args->pktios[0].tx_q[0];
+	pktio.tx_pktio = gbl_args->pktios[0].pktio;
 
     if(odp_packet_copy_to_mem(pkt, 0, 2 * sizeof(odph_ethaddr_t), &macaddr) != 0) {
         return 1;
@@ -1015,6 +1012,32 @@ static inline int add_dsa_snat_fromcpu(odp_packet_t pkt,
 		printf("\n");
 	}
 	return 0;
+}
+
+static inline int send_fromcpu_after_snat(odp_packet_t pkt)
+{
+	odp_nat_pktio_t pktio;
+	int j;
+	uint8_t *data;
+
+	pktio.tx_idx = 0;
+	pktio.pktout = gbl_args->pktios[0].pktout[0];
+	pktio.tx_queue = gbl_args->pktios[0].tx_q[0];
+	pktio.tx_pktio = gbl_args->pktios[0].pktio;
+
+	if (odp_unlikely(gbl_args->appl.debug_mode)) {
+		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
+		printf("Packet from CPU after SNAT\n");
+
+		for (j = 0; j < 64; j++)
+			printf("%02x ", data[j]);
+		printf("\n");
+	}
+
+	if (1 == odp_pktout_send(pktio.pktout, &pkt, 1))
+		return 2;
+	else
+		return 1;
 }
 
 static inline void do_snat(odph_ipv4hdr_t *ipv4hdr, odph_udphdr_t *udphdr,
@@ -1633,19 +1656,21 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 			if (odp_unlikely(gbl_args->appl.debug_mode))
 				printf("L3 pkt from tap WAN\n");
 
-			add_dsa_snat_fromcpu(pkt, pktio);
-			proceed = send_to_snat(pkt, 1);
-			if (proceed == 1) {
-				if (odp_unlikely(strip_dsa_hdr(pkt) == 1)) {
-					proceed = 1;
-				} else {
-					proceed = process_fromcpu_wan(pkt,
-								      pktio);
-				}
-			}
-		} else {
+			if (add_dsa_snat_fromcpu(pkt, pktio) == 0) {
+				if (odp_likely(send_to_snat(pkt, 1) == 0))
+					proceed = send_fromcpu_after_snat(pkt);
+				else
+					/* not found in NAT table */
+					if (strip_dsa_hdr(pkt) == 1)
+						proceed = 1;
+					else
+						proceed =
+						process_fromcpu_wan(pkt, pktio);
+			} else
+				/* failed to add DSA, drop the packet */
+				proceed = 1;
+		} else
 			proceed = process_fromcpu_wan(pkt, pktio);
-		}
                 break;
             default:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
@@ -1678,7 +1703,7 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
             case 2:
 		control_sent++;
                 if (odp_unlikely(gbl_args->appl.debug_mode))
-			printf("Sent to Control Plane\n");
+			printf("Sent to/from Control Plane\n");
             default:
                 break;
         }
