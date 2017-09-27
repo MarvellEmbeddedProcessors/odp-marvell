@@ -1494,6 +1494,7 @@ static inline int send_to_dnat(odp_packet_t pkt)
 				printf("send_to_dnat invalid ipv4hdr\n");
 			}
 		}
+		return 0;
 	}
 
 	if (odp_unlikely(0 != build_hash_search_key(&ipv4, ipv4hdr, udphdr)))
