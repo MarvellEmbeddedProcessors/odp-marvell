@@ -1224,15 +1224,20 @@ int odp_pktin_queue_config(odp_pktio_t pktio,
 
 	num_queues = param->num_queues;
 
-	if (num_queues == 0) {
-		ODP_DBG("pktio %s: zero input queues\n", entry->s.name);
-		return -1;
-	}
-
 	rc = odp_pktio_capability(pktio, &capa);
 	if (rc) {
 		ODP_DBG("pktio %s: unable to read capabilities\n",
 			entry->s.name);
+		return -1;
+	}
+
+#ifdef ODP_NO_IGNORE_QS_CLASSIFY_EN_BUG_3289
+	if (param->classifier_enable)
+		num_queues = capa.max_input_queues;
+#endif
+
+	if (num_queues == 0) {
+		ODP_DBG("pktio %s: zero input queues\n", entry->s.name);
 		return -1;
 	}
 
@@ -1257,6 +1262,10 @@ int odp_pktin_queue_config(odp_pktio_t pktio,
 
 			memcpy(&queue_param, &param->queue_param,
 			       sizeof(odp_queue_param_t));
+
+#ifdef ODP_NO_IGNORE_QS_CLASSIFY_EN_BUG_3289
+			odp_queue_param_init(&queue_param);
+#endif
 
 			queue_param.type = ODP_QUEUE_TYPE_PLAIN;
 

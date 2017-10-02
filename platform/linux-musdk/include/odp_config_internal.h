@@ -12,9 +12,13 @@
 extern "C" {
 #endif
 
-/* MUSDK - start */
 /* Take compilation flags from the included musdk_lib */
 #include <env/mv_autogen_comp_flags.h>
+
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+
+#define ODP_NO_IGNORE_QS_CLASSIFY_EN_BUG_3289
 
 /* TODO: MUSDK: get rid of the following lines and make them generic. */
 #define MVPP2_TOTAL_NUM_HIFS	9
@@ -26,9 +30,15 @@ extern "C" {
 #define MVPP2_HIF_RSRV		0xF
 #define MVPP2_BPOOL_RSRV	0x7
 
-#define MVPP2_MAX_NUM_TCS_PER_PORT	1
+#define MVPP2_MAX_NUM_TX_TCS_PER_PORT	1
+#define MVPP2_MAX_NUM_RX_TCS_PER_PORT	32
+#define MVPP2_MAX_NUM_RX_HASH_TCS_PER_PORT	1
 /* TODO: temporary set num-RxQs-per-tc according to #cores */
-#define MVPP2_MAX_NUM_QS_PER_TC		4
+#define MVPP2_MAX_NUM_QS_PER_RX_TC	4
+#define MVPP2_MAX_NUM_RX_QS_PER_PORT	\
+	MAX(MVPP2_MAX_NUM_RX_TCS_PER_PORT, \
+	(MVPP2_MAX_NUM_RX_HASH_TCS_PER_PORT * MVPP2_MAX_NUM_QS_PER_RX_TC))
+
 #define MVPP2_RXQ_SIZE_10G      4096
 #define MVPP2_RXQ_SIZE_1G       2048
 #define MVPP2_TXQ_SIZE			2048
@@ -36,6 +46,22 @@ extern "C" {
 
 #define MVPP2_MAX_RX_BURST_SIZE		256
 #define MVPP2_MAX_TX_BURST_SIZE		256
+
+/**
+ * Pktio queues layout with classifier enabled
+ * Hardware queue 0 - default queue (hardcoded on MVPP2 kernel driver)
+ * Hardware queue 1 - CoS 0
+ * Hardware queue N - CoS N
+ * Error queue isn't supported by Armada/MUSDK, software will take care to
+ * enqueue on proper ODP app error queue.
+ */
+/* First CoS dedicated harwdare queue */
+#define MVPP2_CLS_COS0_HWQ		1
+/* Receive packet error packet. Error queue is implemented on software
+ * as there is no support for it on MUSDK */
+#define MVPP2_RECV_ERROR_QUEUE		(-1)
+/* Default CoS dedicated harwdare queue */
+#define MVPP2_DEFAULT_HWQ		0
 
 #define MVGIU_MAX_NUM_TCS_PER_PORT	1
 #define MVGIU_MAX_NUM_QS_PER_TC		1

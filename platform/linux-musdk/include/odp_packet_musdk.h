@@ -15,6 +15,7 @@
 
 #include <drivers/mv_pp2_bpool.h>
 #include <drivers/mv_pp2_ppio.h>
+#include <drivers/mv_pp2_cls.h>
 #ifdef ODP_PKTIO_MVGIU
 #include <drivers/mv_giu_bpool.h>
 #include <drivers/mv_giu_gpio.h>
@@ -24,7 +25,7 @@
 #include <fcntl.h>
 #endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
 
-#define MAX_NUM_OUTQS_PER_CORE	MVPP2_MAX_NUM_TCS_PER_PORT
+#define MAX_NUM_OUTQS_PER_CORE	MVPP2_MAX_NUM_TX_TCS_PER_PORT
 #define SHADOW_Q_MAX_SIZE	MVPP2_TXQ_SIZE	/* Should be power of 2 */
 #define SHADOW_Q_MAX_SIZE_MASK	(SHADOW_Q_MAX_SIZE - 1)
 
@@ -105,8 +106,12 @@ typedef struct {
 	int			num_out_queues;
 	struct mvpp2_tx_shadow_q
 		shadow_qs[MVPP2_TOTAL_NUM_HIFS][MAX_NUM_OUTQS_PER_CORE];
-	struct inq_info		inqs[MVPP2_MAX_NUM_QS_PER_TC];
+	u8			num_inqs;
+	struct inq_info		inqs[MVPP2_MAX_NUM_RX_QS_PER_PORT];
 	enum pp2_ppio_hash_type	hash_type;
+	struct pp2_cls_qos_tbl_params qos_tbl_params;
+	struct pp2_cls_tbl *qos_tbl;
+	odp_ticketlock_t l2_l3_cos_lock;
 } pkt_mvpp2_t;
 
 #ifdef ODP_PKTIO_MVGIU
@@ -126,5 +131,12 @@ typedef struct {
 	struct inq_info	inqs[MVGIU_MAX_NUM_QS_PER_TC];
 } pkt_mvgiu_t;
 #endif /* ODP_PKTIO_MVGIU */
+
+void mvpp2_init_cls(odp_pktio_t pktio);
+void mvpp2_deinit_cls(odp_pktio_t pktio);
+int mvpp2_update_qos(odp_pktio_t pktio);
+int mvpp2_cls_select_cos(odp_pktio_t pktio,
+			 odp_packet_t *pkt,
+			 int hw_rxq_id);
 
 #endif /* ODP_PACKET_MUSDK_H_ */

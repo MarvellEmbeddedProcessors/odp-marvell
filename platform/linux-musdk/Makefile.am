@@ -173,7 +173,7 @@ __LIB__libodp_linux_la_SOURCES = \
 			   ../linux-generic/odp_bitmap.c \
 			   ../linux-generic/odp_buffer.c \
 			   ../linux-generic/odp_byteorder.c \
-			   ../linux-generic/odp_classification.c \
+			   odp_classification.c \
 			   ../linux-generic/odp_cpu.c \
 			   ../linux-generic/odp_cpumask.c \
 			   ../linux-generic/odp_cpumask_task.c \
@@ -235,6 +235,7 @@ endif
 
 if ODP_PKTIO_MVPP2
 __LIB__libodp_linux_la_SOURCES += pktio/mvpp2.c
+__LIB__libodp_linux_la_SOURCES += pktio/mvpp2_cls.c
 endif
 
 if ODP_PKTIO_MVGIU

@@ -225,6 +225,13 @@ typedef struct pktio_if_ops {
 				   const odp_pktin_queue_param_t *param);
 	int (*output_queues_config)(pktio_entry_t *pktio_entry,
 				    const odp_pktout_queue_param_t *p);
+	/* Classification */
+	int (*cos_with_l2_priority)(pktio_entry_t *pktio_entry,
+				    uint8_t num_qos,
+				    uint8_t qos_table[]);
+	int (*cos_with_l3_priority)(pktio_entry_t *pktio_entry,
+				    uint8_t num_qos,
+				    uint8_t qos_table[]);
 } pktio_if_ops_t;
 
 extern void *pktio_entry_ptr[];

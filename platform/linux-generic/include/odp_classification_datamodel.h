@@ -131,6 +131,9 @@ corresponding cos_t object
 typedef struct pmr_l2_cos {
 	odp_spinlock_t lock;	/* pmr_l2_cos lock */
 	cos_t *cos[ODP_COS_MAX_L2_QOS];	/* Array of CoS objects */
+#ifdef ODP_PKTIO_MVPP2
+	cos_t *cos_by_idx[ODP_COS_MAX_L2_QOS]; /* Array of CoS objects */
+#endif
 } pmr_l2_cos_t;
 
 /**
@@ -142,6 +145,9 @@ corresponding cos_t object
 typedef struct pmr_l3_cos {
 	odp_spinlock_t lock;	/* pmr_l3_cos lock */
 	cos_t *cos[ODP_COS_MAX_L3_QOS];	/* Array of CoS objects */
+#ifdef ODP_PKTIO_MVPP2
+	cos_t *cos_by_idx[ODP_COS_MAX_L3_QOS]; /* Array of CoS objects */
+#endif
 } pmr_l3_cos_t;
 
 /**
