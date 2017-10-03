@@ -311,19 +311,52 @@ static uint32_t ipv4_aton(char *ip_str)
 {
 	uint8_t byte1 = 0, byte2 = 0, byte3 = 0, byte4 = 0;
 	char *token;
+	char temp_str[16];
 
 	token = strtok(ip_str, ".");
 	if (token != NULL)
 		byte1 = (uint8_t)atoi(token);
+	else
+		return 0;
+
+	sprintf(temp_str, "%d", byte1);
+	if (strcmp(token, temp_str) != 0)
+		return 0;
+
 	token = strtok(NULL, ".");
 	if (token != NULL)
 		byte2 = (uint8_t)atoi(token);
+	else
+		return 0;
+
+	sprintf(temp_str, "%d", byte2);
+	if (strcmp(token, temp_str) != 0)
+		return 0;
+
 	token = strtok(NULL, ".");
 	if (token != NULL)
 		byte3 = (uint8_t)atoi(token);
+	else
+		return 0;
+
+	sprintf(temp_str, "%d", byte3);
+	if (strcmp(token, temp_str) != 0)
+		return 0;
+
 	token = strtok(NULL, ".");
 	if (token != NULL)
 		byte4 = (uint8_t)atoi(token);
+	else
+		return 0;
+
+	sprintf(temp_str, "%d", byte4);
+	if (strcmp(token, temp_str) != 0)
+		return 0;
+
+	token = strtok(NULL, ".");
+	if (token != NULL)
+		return 0;
+
 	return (byte1 << 24) | (byte2 << 16) | (byte3 << 8) | byte4;
 }
 
@@ -2428,7 +2461,9 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	int long_index;
 	char *token;
 	char *addr_str, *addr_str2, *mask_str, *tap_str;
+	char temp_str[16];
 	size_t len;
+	int mask;
 	int i;
 	static const struct option longopts[] = {
 		{"count", required_argument, NULL, 'c'},
@@ -2468,9 +2503,21 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		switch (opt) {
 		case 'c':
 			appl_args->cpu_count = atoi(optarg);
+			sprintf(temp_str, "%d", appl_args->cpu_count);
+			if (strcmp(optarg, temp_str) != 0) {
+				printf("Invalid CPU count\n");
+				usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
 			break;
 		case 'a':
 			appl_args->accuracy = atoi(optarg);
+			sprintf(temp_str, "%d", appl_args->accuracy);
+			if (strcmp(optarg, temp_str) != 0) {
+				printf("Invalid accuracy\n");
+				usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
 			break;
 		case 'i':
 			len = strlen(optarg);
@@ -2515,7 +2562,19 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 				usage(argv[0]);
 				exit(EXIT_FAILURE);
 			}
-			local_mask = ((1u << atoi(mask_str)) - 1) << (32 - atoi(mask_str));
+
+			mask = atoi(mask_str);
+			sprintf(temp_str, "%d", mask);
+			if (strcmp(mask_str, temp_str) != 0) {
+				usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			if ((mask < 0) || (mask > 32)) {
+				printf("Invalid local IP mask\n");
+				exit(EXIT_FAILURE);
+			}
+
+			local_mask = ((1u << mask) - 1) << (32 - mask);
 			addr_str2 = strtok(NULL, "/");
 			if (addr_str == NULL) {
 				usage(argv[0]);
@@ -2526,22 +2585,50 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 				usage(argv[0]);
 				exit(EXIT_FAILURE);
 			}
-			public_mask = ((1ull << atoi(mask_str)) - 1) << (32 - atoi(mask_str));
+
+			mask = atoi(mask_str);
+			sprintf(temp_str, "%d", mask);
+			if (strcmp(mask_str, temp_str) != 0) {
+				usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			if ((mask < 0) || (mask > 32)) {
+				printf("Invalid public IP mask\n");
+				exit(EXIT_FAILURE);
+			}
+
+			public_mask = ((1ull << mask) - 1) << (32 - mask);
 
 			local_subnet = ipv4_aton(addr_str);
 			public_subnet = ipv4_aton(addr_str2);
+			if ((local_subnet == 0) || (public_subnet == 0)) {
+				printf("Invalid IP address\n");
+				exit(EXIT_FAILURE);
+			}
+
 			ip_table_add_entry(local_subnet, local_mask, public_subnet, public_mask);
 			break;
 		}
 
 		case 'o':
 			appl_args->aging_time = atoi(optarg);
+
+			sprintf(temp_str, "%d", appl_args->aging_time);
+			if (strcmp(optarg, temp_str) != 0) {
+				printf("Invalid aging time\n");
+				usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
+
 			if (appl_args->aging_time > MAX_AGING_TIME) {
-				appl_args->aging_time = MAX_AGING_TIME;
-				printf("Aging time is set to its maximum value = 3600\n");
+				printf("Invalid aging time\n");
+				exit(EXIT_FAILURE);
 			}
 			if (appl_args->aging_time == 0)
 				printf("Aging disabled\n");
+			else
+				printf("Aging time = %d\n",
+				       appl_args->aging_time);
 			break;
 
 		case 's':
@@ -2550,6 +2637,11 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 
 		case 'l':
 			appl_args->lan_vid = atoi(optarg);
+			sprintf(temp_str, "%d", appl_args->lan_vid);
+			if (strcmp(optarg, temp_str) != 0) {
+				printf("Invalid LAN VID\n");
+				exit(EXIT_FAILURE);
+			}
 			break;
 
         case 'w':
@@ -2576,6 +2668,13 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
             for (token = strtok(optarg, ","), i = 0;
                 (token != NULL) && (i < ODP_NAT_MAX_WAN_IP); token = strtok(NULL, ","), i++) {
                 appl_args->wan_vid[i] = atoi(token);
+
+		sprintf(temp_str, "%d", appl_args->wan_vid[i]);
+		if (strcmp(temp_str, token) != 0) {
+			printf("Invalid WAN VID\n");
+			exit(EXIT_FAILURE);
+		}
+
                 sprintf(tap_str, ",tap:wan%d", appl_args->wan_vid[i]);
                 tap_str += strlen(tap_str);
             }
