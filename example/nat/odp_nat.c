@@ -1913,9 +1913,12 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	config.pktout.bit.udp_chksum = capa.config.pktout.bit.udp_chksum & 0x1;
 	config.pktout.bit.tcp_chksum = capa.config.pktout.bit.tcp_chksum & 0x1;
 	/* Rx dropping on errors */
-	config.pktin.bit.drop_ipv4_err = 0;
-	config.pktin.bit.drop_udp_err = 0;
-	config.pktin.bit.drop_tcp_err = 0;
+	config.pktin.bit.drop_ipv4_err =
+		capa.config.pktin.bit.drop_ipv4_err & 0x1;
+	config.pktin.bit.drop_udp_err =
+		capa.config.pktin.bit.drop_udp_err & 0x1;
+	config.pktin.bit.drop_tcp_err =
+		capa.config.pktin.bit.drop_tcp_err & 0x1;
 
 	/* Configure DSA mode
 	* Marvell proprietary. Use one of the two upper bits in
