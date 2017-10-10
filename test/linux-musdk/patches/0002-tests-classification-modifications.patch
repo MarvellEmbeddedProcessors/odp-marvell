@@ -1,0 +1,388 @@
+From bb692909af32a375f17cca24ae54b1d5e6f884de Mon Sep 17 00:00:00 2001
+From: Liron Himi <lironh@marvell.com>
+Date: Wed, 11 Oct 2017 01:37:38 +0300
+Subject: [PATCH 2/2] tests: classification modifications
+
+Change-Id: Iaccd221c16d8f6a76411fd0e279eca1796bb5e5a
+Signed-off-by: Liron Himi <lironh@marvell.com>
+---
+ platform/linux-generic/odp_pool.c                  |   2 +-
+ .../validation/api/classification/classification.c |   2 +
+ .../validation/api/classification/classification.h |  14 ++-
+ .../api/classification/odp_classification_common.c |  31 +++++-
+ .../api/classification/odp_classification_tests.c  | 124 ++++++++++++++++++++-
+ .../classification/odp_classification_testsuites.h |   2 +
+ 6 files changed, 166 insertions(+), 9 deletions(-)
+
+diff --git a/platform/linux-generic/odp_pool.c b/platform/linux-generic/odp_pool.c
+index 04c529d..5b49f96 100644
+--- a/platform/linux-generic/odp_pool.c
++++ b/platform/linux-generic/odp_pool.c
+@@ -542,7 +542,7 @@ int odp_pool_destroy(odp_pool_t pool_hdl)
+ 	pool_t *pool = pool_entry_from_hdl(pool_hdl);
+ 	int i;
+ 
+-	if (pool == NULL)
++	if ((pool_hdl == ODP_POOL_INVALID) || (pool == NULL))
+ 		return -1;
+ 
+ 	LOCK(&pool->lock);
+diff --git a/test/common_plat/validation/api/classification/classification.c b/test/common_plat/validation/api/classification/classification.c
+index 1032e7f..a6b17e0 100644
+--- a/test/common_plat/validation/api/classification/classification.c
++++ b/test/common_plat/validation/api/classification/classification.c
+@@ -13,11 +13,13 @@ odp_suiteinfo_t classification_suites[] = {
+ 	{ .pName = "classification basic",
+ 			.pTests = classification_suite_basic,
+ 	},
++/*
+ 	{ .pName = "classification pmr tests",
+ 			.pTests = classification_suite_pmr,
+ 			.pInitFunc = classification_suite_pmr_init,
+ 			.pCleanupFunc = classification_suite_pmr_term,
+ 	},
++*/
+ 	{ .pName = "classification tests",
+ 			.pTests = classification_suite,
+ 			.pInitFunc = classification_suite_init,
+diff --git a/test/common_plat/validation/api/classification/classification.h b/test/common_plat/validation/api/classification/classification.h
+index 53c527f..4dee8a6 100644
+--- a/test/common_plat/validation/api/classification/classification.h
++++ b/test/common_plat/validation/api/classification/classification.h
+@@ -27,19 +27,19 @@
+ #define CLS_ERROR		1
+ 
+ /* Config values for PMR_CHAIN */
+-#define TEST_PMR_CHAIN		1
++#define TEST_PMR_CHAIN		0
+ #define CLS_PMR_CHAIN_SRC	2
+ #define CLS_PMR_CHAIN_DST	3
+ #define CLS_PMR_CHAIN_SADDR	"10.0.0.5/32"
+ #define CLS_PMR_CHAIN_PORT	3000
+ 
+ /* Config values for PMR */
+-#define TEST_PMR		1
++#define TEST_PMR		0
+ #define CLS_PMR			4
+ #define CLS_PMR_PORT		4000
+ 
+ /* Config values for PMR SET */
+-#define TEST_PMR_SET		1
++#define TEST_PMR_SET		0
+ #define CLS_PMR_SET		5
+ #define CLS_PMR_SET_SADDR	"10.0.0.6/32"
+ #define CLS_PMR_SET_PORT	5000
+@@ -49,7 +49,13 @@
+ #define CLS_L2_QOS_0		6
+ #define CLS_L2_QOS_MAX		5
+ 
+-#define CLS_ENTRIES		(CLS_L2_QOS_0 + CLS_L2_QOS_MAX)
++/* Config values for CoS L3 Priority */
++#define TEST_L3_QOS		1
++#define CLS_L3_QOS_0		(CLS_L2_QOS_0 + CLS_L2_QOS_MAX)
++#define CLS_L3_QOS_MAX		5
++#define CLS_L3_INITIAL_DSCP	1
++
++#define CLS_ENTRIES		(CLS_L2_QOS_0 + CLS_L2_QOS_MAX + CLS_L3_QOS_MAX)
+ 
+ /* Test Packet values */
+ #define DATA_MAGIC		0x01020304
+diff --git a/test/common_plat/validation/api/classification/odp_classification_common.c b/test/common_plat/validation/api/classification/odp_classification_common.c
+index eca30b8..f1a9ce8 100644
+--- a/test/common_plat/validation/api/classification/odp_classification_common.c
++++ b/test/common_plat/validation/api/classification/odp_classification_common.c
+@@ -7,8 +7,12 @@
+ #include "odp_classification_testsuites.h"
+ #include "classification.h"
+ #include <odp_cunit_common.h>
++#include <stdlib.h>
+ #include "test_debug.h"
+ 
++/** interface name used for testing */
++static const char *iface_name;
++
+ typedef struct cls_test_packet {
+ 	odp_u32be_t magic;
+ 	odp_u32be_t seq;
+@@ -29,18 +33,27 @@ odp_pktio_t create_pktio(odp_queue_type_t q_type, odp_pool_t pool)
+ 	odp_pktio_t pktio;
+ 	odp_pktio_param_t pktio_param;
+ 	odp_pktin_queue_param_t pktin_param;
++	odp_pktio_config_t config;
++	odp_pktio_capability_t capa;
+ 	int ret;
+ 
+ 	if (pool == ODP_POOL_INVALID)
+ 		return ODP_PKTIO_INVALID;
+ 
++	iface_name = getenv("ODP_PKTIO_IF0");
++
++	if (!iface_name) {
++		printf("No interfaces specified, using default \"loop\".\n");
++		iface_name = "loop";
++	}
++
+ 	odp_pktio_param_init(&pktio_param);
+ 	if (q_type == ODP_QUEUE_TYPE_PLAIN)
+ 		pktio_param.in_mode = ODP_PKTIN_MODE_QUEUE;
+ 	else
+ 		pktio_param.in_mode = ODP_PKTIN_MODE_SCHED;
+ 
+-	pktio = odp_pktio_open("loop", pool, &pktio_param);
++	pktio = odp_pktio_open(iface_name, pool, &pktio_param);
+ 	if (pktio == ODP_PKTIO_INVALID) {
+ 		ret = odp_pool_destroy(pool);
+ 		if (ret)
+@@ -50,6 +63,8 @@ odp_pktio_t create_pktio(odp_queue_type_t q_type, odp_pool_t pool)
+ 
+ 	odp_pktin_queue_param_init(&pktin_param);
+ 	pktin_param.queue_param.sched.sync = ODP_SCHED_SYNC_ATOMIC;
++	pktin_param.classifier_enable = 1;
++	pktin_param.num_queues = 0;
+ 
+ 	if (odp_pktin_queue_config(pktio, &pktin_param)) {
+ 		fprintf(stderr, "pktin queue config failed.\n");
+@@ -61,6 +76,16 @@ odp_pktio_t create_pktio(odp_queue_type_t q_type, odp_pool_t pool)
+ 		return ODP_PKTIO_INVALID;
+ 	}
+ 
++	odp_pktio_capability(pktio, &capa);
++
++	odp_pktio_config_init(&config);
++	config.enable_loop = capa.loop_supported;
++
++	if (odp_pktio_config(pktio, &config)) {
++		fprintf(stderr, "pktio config failed.\n");
++		return ODP_PKTIO_INVALID;
++	}
++
+ 	return pktio;
+ }
+ 
+@@ -312,11 +337,11 @@ odp_packet_t create_packet(cls_packet_info_t pkt_info)
+ 		ip->src_addr = odp_cpu_to_be_32(addr);
+ 		ip->ver_ihl = ODPH_IPV4 << 4 | ODPH_IPV4HDR_IHL_MIN;
+ 		ip->id = odp_cpu_to_be_16(seqno);
+-		ip->chksum = 0;
+-		ip->chksum = odph_ipv4_csum_update(pkt);
+ 		ip->proto = next_hdr;
+ 		ip->tot_len = odp_cpu_to_be_16(l3_len);
+ 		ip->ttl = DEFAULT_TTL;
++		ip->chksum = 0;
++		ip->chksum = odph_ipv4_csum_update(pkt);
+ 		odp_packet_has_ipv4_set(pkt, 1);
+ 	} else {
+ 		/* ipv6 */
+diff --git a/test/common_plat/validation/api/classification/odp_classification_tests.c b/test/common_plat/validation/api/classification/odp_classification_tests.c
+index 4f43082..d82fcaa 100644
+--- a/test/common_plat/validation/api/classification/odp_classification_tests.c
++++ b/test/common_plat/validation/api/classification/odp_classification_tests.c
+@@ -8,6 +8,8 @@
+ #include "classification.h"
+ #include <odp_cunit_common.h>
+ 
++#include <stdlib.h>
++
+ static odp_cos_t cos_list[CLS_ENTRIES];
+ static odp_pmr_t pmr_list[CLS_ENTRIES];
+ static odp_queue_t queue_list[CLS_ENTRIES];
+@@ -22,12 +24,24 @@ odp_atomic_u32_t seq;
+ /* default packet info */
+ static cls_packet_info_t default_pkt_info;
+ 
++/** interface name used for testing */
++static const char *iface_name;
++
+ int classification_suite_init(void)
+ {
+ 	int i;
+ 	int ret;
+ 	odp_pktio_param_t pktio_param;
+ 	odp_pktin_queue_param_t pktin_param;
++	odp_pktio_config_t config;
++	odp_pktio_capability_t capa;
++
++	iface_name = getenv("ODP_PKTIO_IF0");
++
++	if (!iface_name) {
++		printf("No interfaces specified, using default \"loop\".\n");
++		iface_name = "loop";
++	}
+ 
+ 	pool_default = pool_create("classification_pool");
+ 	if (ODP_POOL_INVALID == pool_default) {
+@@ -38,7 +52,7 @@ int classification_suite_init(void)
+ 	odp_pktio_param_init(&pktio_param);
+ 	pktio_param.in_mode = ODP_PKTIN_MODE_SCHED;
+ 
+-	pktio_loop = odp_pktio_open("loop", pool_default, &pktio_param);
++	pktio_loop = odp_pktio_open(iface_name, pool_default, &pktio_param);
+ 	if (pktio_loop == ODP_PKTIO_INVALID) {
+ 		ret = odp_pool_destroy(pool_default);
+ 		if (ret)
+@@ -52,6 +66,8 @@ int classification_suite_init(void)
+ 
+ 	odp_pktin_queue_param_init(&pktin_param);
+ 	pktin_param.queue_param.sched.sync = ODP_SCHED_SYNC_ATOMIC;
++	pktin_param.classifier_enable = 1;
++	pktin_param.num_queues = 0;
+ 
+ 	if (odp_pktin_queue_config(pktio_loop, &pktin_param)) {
+ 		fprintf(stderr, "pktin queue config failed.\n");
+@@ -63,6 +79,17 @@ int classification_suite_init(void)
+ 		return -1;
+ 	}
+ 
++	odp_pktio_capability(pktio_loop, &capa);
++
++	odp_pktio_config_init(&config);
++	config.enable_loop = capa.loop_supported;
++	config.pktin.bit.ipv4_chksum = capa.config.pktin.bit.ipv4_chksum;
++
++	if (odp_pktio_config(pktio_loop, &config)) {
++		fprintf(stderr, "pktio config failed.\n");
++		return -1;
++	}
++
+ 	for (i = 0; i < CLS_ENTRIES; i++)
+ 		cos_list[i] = ODP_COS_INVALID;
+ 
+@@ -117,6 +144,7 @@ int classification_suite_term(void)
+ 
+ 	for (i = 0; i < CLS_ENTRIES; i++)
+ 		odp_pool_destroy(pool_list[i]);
++	return 0;
+ 
+ 	return retcode;
+ }
+@@ -515,6 +543,96 @@ void test_cos_with_l2_priority(void)
+ 	}
+ }
+ 
++void configure_cos_with_l3_priority(void)
++{
++	uint8_t num_qos = CLS_L3_QOS_MAX;
++	odp_cos_t cos_tbl[CLS_L3_QOS_MAX];
++	odp_queue_t queue_tbl[CLS_L3_QOS_MAX];
++	odp_pool_t pool;
++	uint8_t qos_tbl[CLS_L3_QOS_MAX];
++	char cosname[ODP_COS_NAME_LEN];
++	char queuename[ODP_QUEUE_NAME_LEN];
++	char poolname[ODP_POOL_NAME_LEN];
++	int retval;
++	int i;
++	odp_queue_param_t qparam;
++	odp_cls_cos_param_t cls_param;
++	odp_bool_t l3_preference = 0;
++
++	/** Initialize scalar variable qos_tbl **/
++	for (i = 0; i < CLS_L3_QOS_MAX; i++)
++		qos_tbl[i] = 0;
++
++	odp_queue_param_init(&qparam);
++	qparam.type       = ODP_QUEUE_TYPE_SCHED;
++	qparam.sched.sync = ODP_SCHED_SYNC_PARALLEL;
++	qparam.sched.group = ODP_SCHED_GROUP_ALL;
++	for (i = 0; i < num_qos; i++) {
++		qparam.sched.prio = ODP_SCHED_PRIO_HIGHEST;
++		sprintf(queuename, "%s_%d", "L3_Queue", i);
++		queue_tbl[i] = odp_queue_create(queuename, &qparam);
++		CU_ASSERT_FATAL(queue_tbl[i] != ODP_QUEUE_INVALID);
++		queue_list[CLS_L3_QOS_0 + i] = queue_tbl[i];
++
++		sprintf(poolname, "%s_%d", "L3_Pool", i);
++		pool = pool_create(poolname);
++		CU_ASSERT_FATAL(pool != ODP_POOL_INVALID);
++		pool_list[CLS_L3_QOS_0 + i] = pool;
++
++		sprintf(cosname, "%s_%d", "L3_Cos", i);
++		odp_cls_cos_param_init(&cls_param);
++		cls_param.pool = pool;
++		cls_param.queue = queue_tbl[i];
++		cls_param.drop_policy = ODP_COS_DROP_POOL;
++		cos_tbl[i] = odp_cls_cos_create(cosname, &cls_param);
++		if (cos_tbl[i] == ODP_COS_INVALID)
++			break;
++
++		cos_list[CLS_L3_QOS_0 + i] = cos_tbl[i];
++		qos_tbl[i] = (CLS_L3_INITIAL_DSCP + i);
++	}
++	/* count 'i' is passed instead of num_qos to handle the rare scenario
++	if the odp_cls_cos_create() failed in the middle*/
++	retval = odp_cos_with_l3_qos(
++		pktio_loop, i, qos_tbl, cos_tbl, l3_preference);
++	CU_ASSERT(retval == 0);
++}
++
++void test_cos_with_l3_priority(void)
++{
++	odp_packet_t pkt;
++	odph_ipv4hdr_t *ipv4_hdr;
++	odp_queue_t queue;
++	odp_pool_t pool;
++	uint32_t seqno = 0;
++	cls_packet_info_t pkt_info;
++	uint8_t i;
++
++	pkt_info = default_pkt_info;
++	pkt_info.udp = true;
++
++	for (i = 0; i < CLS_L3_QOS_MAX; i++) {
++		pkt = create_packet(pkt_info);
++		CU_ASSERT_FATAL(pkt != ODP_PACKET_INVALID);
++		seqno = cls_pkt_get_seq(pkt);
++		CU_ASSERT(seqno != TEST_SEQ_INVALID);
++		ipv4_hdr = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
++		ipv4_hdr->tos =
++			(ipv4_hdr->tos & ODPH_IP_TOS_DSCP_SHIFT) |
++			((CLS_L3_INITIAL_DSCP + i) << ODPH_IP_TOS_DSCP_SHIFT);
++		ipv4_hdr->chksum = 0;
++		ipv4_hdr->chksum = odph_ipv4_csum_update(pkt);
++		enqueue_pktio_interface(pkt, pktio_loop);
++		pkt = receive_packet(&queue, ODP_TIME_SEC_IN_NS);
++		CU_ASSERT_FATAL(pkt != ODP_PACKET_INVALID);
++		CU_ASSERT(queue == queue_list[CLS_L3_QOS_0 + i]);
++		pool = odp_packet_pool(pkt);
++		CU_ASSERT(pool == pool_list[CLS_L3_QOS_0 + i]);
++		CU_ASSERT(seqno == cls_pkt_get_seq(pkt));
++		odp_packet_free(pkt);
++	}
++}
++
+ void configure_pmr_cos(void)
+ {
+ 	uint16_t val;
+@@ -691,6 +809,8 @@ void classification_test_pktio_configure(void)
+ 		configure_cls_pmr_chain();
+ 	if (TEST_L2_QOS)
+ 		configure_cos_with_l2_priority();
++	if (TEST_L3_QOS)
++		configure_cos_with_l3_priority();
+ 	if (TEST_PMR)
+ 		configure_pmr_cos();
+ 	if (TEST_PMR_SET)
+@@ -708,6 +828,8 @@ void classification_test_pktio_test(void)
+ 		test_cls_pmr_chain();
+ 	if (TEST_L2_QOS)
+ 		test_cos_with_l2_priority();
++	if (TEST_L3_QOS)
++		test_cos_with_l3_priority();
+ 	if (TEST_PMR)
+ 		test_pmr_cos();
+ 	if (TEST_PMR_SET)
+diff --git a/test/common_plat/validation/api/classification/odp_classification_testsuites.h b/test/common_plat/validation/api/classification/odp_classification_testsuites.h
+index d296923..ac0a914 100644
+--- a/test/common_plat/validation/api/classification/odp_classification_testsuites.h
++++ b/test/common_plat/validation/api/classification/odp_classification_testsuites.h
+@@ -51,6 +51,8 @@ void configure_cls_pmr_chain(void);
+ void test_cls_pmr_chain(void);
+ void configure_cos_with_l2_priority(void);
+ void test_cos_with_l2_priority(void);
++void configure_cos_with_l3_priority(void);
++void test_cos_with_l3_priority(void);
+ void configure_pmr_cos(void);
+ void test_pmr_cos(void);
+ void configure_pktio_pmr_composite(void);
+-- 
+2.7.4
+

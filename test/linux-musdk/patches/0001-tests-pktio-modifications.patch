@@ -1,7 +1,7 @@
-From b4deb66f0dc6c1349923aadbe624bb2b6260bee0 Mon Sep 17 00:00:00 2001
+From 660cba27c336f0a80d95a0a2b570f8e49ca9d9ba Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Mon, 18 Sep 2017 12:40:40 +0300
-Subject: [PATCH] tests: pktio modifications
+Subject: [PATCH 1/2] tests: pktio modifications
 
 Change-Id: I4a464a602ceb8f38f56af66ff94dbe458d284352
 Signed-off-by: Liron Himi <lironh@marvell.com>
