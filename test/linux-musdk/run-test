@@ -62,6 +62,10 @@ else
 	done
 fi
 
+if [ $FAIL -ne 0 ]; then
+	echo "!!! FAILED !!!"
+fi
+
 echo "TEST RESULT: $PASS tests passed, $SKIP skipped, $FAIL failed"
 
 exit $res

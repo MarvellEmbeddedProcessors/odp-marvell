@@ -9,9 +9,7 @@ if test_vald
 TESTS = validation/api/pktio/pktio_run.sh \
 	$(ALL_API_VALIDATION_DIR)/buffer/buffer_main$(EXEEXT) \
 	$(ALL_API_VALIDATION_DIR)/classification/classification_main$(EXEEXT) \
-	$(ALL_API_VALIDATION_DIR)/crypto/crypto_main$(EXEEXT) \
 	$(ALL_API_VALIDATION_DIR)/packet/packet_main$(EXEEXT) \
-	$(ALL_API_VALIDATION_DIR)/pool/pool_main$(EXEEXT) \
 	$(ALL_API_VALIDATION_DIR)/queue/queue_main$(EXEEXT)
 
 SUBDIRS += validation/api/pktio
