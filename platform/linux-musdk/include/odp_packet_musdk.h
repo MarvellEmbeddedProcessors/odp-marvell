@@ -48,12 +48,18 @@ struct mvpp2_tx_shadow_q {
 	u16				num_to_release;
 	/* queue entries */
 	struct buff_release_entry	ent[SHADOW_Q_MAX_SIZE];
+	/* input-pktio for each buff-entry; the queue-entries MUST be of type
+	 * 'buff_release_entry' as there is an assumption it is continuous
+	 * when it is used in 'pp2_bpool_put_buffs'
+	 */
+	odp_pktio_t			input_pktio[SHADOW_Q_MAX_SIZE];
 };
 
 #ifdef ODP_PKTIO_MVGIU
 struct mvgiu_buff_release_entry {
 	struct giu_buff_inf	buff;	/* pointer to the buffer object */
 	struct giu_bpool	*bpool;	/* pointer to the bpool object */
+	odp_pktio_t		input_pktio;
 };
 
 struct mvgiu_tx_shadow_q {

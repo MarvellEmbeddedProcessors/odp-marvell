@@ -244,6 +244,8 @@ static inline void mvpp2_free_sent_buffers(struct pp2_hif *hif,
 					   struct mvpp2_tx_shadow_q *shadow_q)
 {
 	struct buff_release_entry *entry;
+	pktio_entry_t *pktio_entry;
+	odp_pktio_t pktio;
 	odp_packet_t pkt;
 	u16 i, num_conf = 0;
 #ifdef USE_LPBK_SW_RECYLCE
@@ -298,20 +300,40 @@ static inline void mvpp2_free_sent_buffers(struct pp2_hif *hif,
 			goto skip_buf;
 		}
 
+		pktio = shadow_q->input_pktio[shadow_q->read_ind + num_bufs];
+		pktio_entry = get_pktio_entry(pktio);
+		if (unlikely(pktio_entry &&
+			     pktio_entry->s.state == PKTIO_STATE_FREE)) {
+			/* In case input pktio is in 'free' state, it means it
+			 * was already closed and this buffer should be return
+			 * to the ODP-POOL instead of the HW-Pool
+			 */
+			pkt = (odp_packet_t)
+				((uintptr_t)entry->buff.cookie);
+			odp_packet_hdr(pkt)->buf_hdr.ext_buf_free_cb = NULL;
+			odp_packet_free(pkt);
+			skip_bufs = 1;
+			goto skip_buf;
+		}
+
 		num_bufs++;
 		if (unlikely(shadow_q->read_ind + num_bufs == SHADOW_Q_MAX_SIZE))
 			goto skip_buf;
 		continue;
 skip_buf:
 		if (num_bufs)
-			pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
+			pp2_bpool_put_buffs(hif,
+					    &shadow_q->ent[shadow_q->read_ind],
+					    &num_bufs);
 		num_bufs += skip_bufs;
 		shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
 		shadow_q->size -= num_bufs;
 		num_bufs = 0;
 	}
 	if (num_bufs) {
-		pp2_bpool_put_buffs(hif, &shadow_q->ent[shadow_q->read_ind], &num_bufs);
+		pp2_bpool_put_buffs(hif,
+				    &shadow_q->ent[shadow_q->read_ind],
+				    &num_bufs);
 		shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
 		shadow_q->size -= num_bufs;
 	}
@@ -394,6 +416,7 @@ static int mvpp2_free_buf(odp_buffer_t buf)
 	struct pp2_buff_inf buff_inf;
 	odp_packet_hdr_t *pkt_hdr;
 	struct pp2_hif	*hif = get_hif(get_thr_id());
+	pktio_entry_t *pktio_entry;
 	int err;
 
 	if (unlikely(!hif)) {
@@ -413,9 +436,26 @@ static int mvpp2_free_buf(odp_buffer_t buf)
 		return -1;
 	}
 
+	pktio_entry = get_pktio_entry(pkt_hdr->input);
+	if (unlikely(pktio_entry &&
+		     pktio_entry->s.state == PKTIO_STATE_FREE)) {
+		/* In case input pktio is in 'free' state, it means it was
+		 * already closed and this buffer was saved in other pktio's
+		 * tx queue. Therefor the buffer should be return to the
+		 * ODP-POOL instead of the HW-Pool. this can be achevied by
+		 * returning a non-zero return code.
+		 */
+		ODP_DBG("mvpp2_free_buf: pktio was closed! "
+			"return the pkt to odp-pool\n");
+		return 1;
+	}
+	pkt_hdr->input = NULL;
+
 	buff_inf.cookie = (u64)pkt;
 	buff_inf.addr   = mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
-	err = pp2_bpool_put_buff(hif, get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool, &buff_inf);
+	err = pp2_bpool_put_buff(hif,
+				 pktio_entry->s.pkt_mvpp2.bpool,
+				 &buff_inf);
 
 	return err;
 }
@@ -1476,10 +1516,15 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		shadow_q->ent[shadow_q->write_ind].buff.addr = pa;
 
 		input_entry = get_pktio_entry(pkt_hdr->input);
-		if (odp_likely(input_entry && input_entry->s.ops == &mvpp2_pktio_ops))
-			shadow_q->ent[shadow_q->write_ind].bpool = input_entry->s.pkt_mvpp2.bpool;
-		else
+		if (odp_likely(input_entry &&
+			       input_entry->s.ops == &mvpp2_pktio_ops)) {
+			shadow_q->ent[shadow_q->write_ind].bpool =
+				input_entry->s.pkt_mvpp2.bpool;
+			shadow_q->input_pktio[shadow_q->write_ind] =
+				pkt_hdr->input;
+		} else {
 			shadow_q->ent[shadow_q->write_ind].bpool = NULL;
+		}
 
 		shadow_q->write_ind = (shadow_q->write_ind + 1) & SHADOW_Q_MAX_SIZE_MASK;
 		shadow_q->size++;

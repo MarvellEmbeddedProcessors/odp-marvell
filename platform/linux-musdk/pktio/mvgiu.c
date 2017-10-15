@@ -51,6 +51,18 @@ static int mvgiu_free_buf(odp_buffer_t buf)
 	}
 
 	pktio_entry = get_pktio_entry(pkt_hdr->input);
+	if (unlikely(pktio_entry &&
+		     pktio_entry->s.state == PKTIO_STATE_FREE)) {
+		/* In case input pktio is in 'free' state, it means it was
+		 * already closed and this buffer was saved in other pktio's
+		 * tx queue. Therefor the buffer should be return to the
+		 * ODP-POOL instead of the HW-Pool. this can be achevied by
+		 * returning a non-zero return code.
+		 */
+		ODP_DBG("mvpp2_free_buf: pktio was closed! "
+			"return the pkt to odp-pool\n");
+		return 1;
+	}
 
 	pkt_hdr->input = NULL;
 	buff_inf.cookie = (u64)pkt;
@@ -68,6 +80,7 @@ static int mvgiu_free_buf(odp_buffer_t buf)
 static inline void mvgiu_free_sent_buffers(struct mvgiu_tx_shadow_q *shadow_q)
 {
 	struct mvgiu_buff_release_entry *entry;
+	pktio_entry_t *pktio_entry;
 	odp_packet_t pkt;
 	u16 i, num_conf = 0;
 
@@ -84,6 +97,19 @@ static inline void mvgiu_free_sent_buffers(struct mvgiu_tx_shadow_q *shadow_q)
 
 		if (unlikely(!entry->bpool)) {
 			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
+			odp_packet_free(pkt);
+			goto skip_buf;
+		}
+
+		pktio_entry = get_pktio_entry(entry->input_pktio);
+		if (unlikely(pktio_entry &&
+			     pktio_entry->s.state == PKTIO_STATE_FREE)) {
+			/* In case input pktio is in 'free' state, it means it
+			 * was already closed and this buffer should be return
+			 * to the ODP-POOL instead of the HW-Pool
+			 */
+			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
+			odp_packet_hdr(pkt)->buf_hdr.ext_buf_free_cb = NULL;
 			odp_packet_free(pkt);
 			goto skip_buf;
 		}
@@ -586,11 +612,14 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 
 		input_entry = get_pktio_entry(pkt_hdr->input);
 		if (odp_likely(input_entry &&
-			       input_entry->s.ops == &mvgiu_pktio_ops))
+			       input_entry->s.ops == &mvgiu_pktio_ops)) {
 			shadow_q->ent[shadow_q->write_ind].bpool =
 				pkt_mvgiu->bpool;
-		else
+			shadow_q->ent[shadow_q->write_ind].input_pktio =
+				pkt_hdr->input;
+		} else {
 			shadow_q->ent[shadow_q->write_ind].bpool = NULL;
+		}
 
 		shadow_q->write_ind = (shadow_q->write_ind + 1) &
 			SHADOW_Q_MAX_SIZE_MASK;
