@@ -144,7 +144,6 @@ typedef struct {
 	char *if_str;		/**< Storage for interface names */
 	char *if_wan_str;	/**< Storage for wan vlans */
 	char  tap_str[128];    /**< Storage for tap interface names */
-	int error_check;        /**< Check packet errors */
 
 	uint32_t aging_time;	/* NAT entries aging time */
 	int dsa_mode;
@@ -1797,6 +1796,7 @@ static int run_worker(void *arg)
 	int num_pktio;
 	odp_pktin_queue_t pktin;
 	int pktio = 0;
+	int rx_drops;
 	thread_args_t *thr_args = arg;
 	stats_t *stats = thr_args->stats;
 
@@ -1823,19 +1823,15 @@ static int run_worker(void *arg)
 		if (odp_unlikely(pkts <= 0))
 			continue;
 
-		if (gbl_args->appl.error_check) {
-			int rx_drops;
+		/* Drop packets with errors */
+		rx_drops = drop_err_pkts(pkt_tbl, pkts);
 
-			/* Drop packets with errors */
-			rx_drops = drop_err_pkts(pkt_tbl, pkts);
+		if (odp_unlikely(rx_drops)) {
+			stats->s.rx_drops += rx_drops;
+			if (pkts == rx_drops)
+				continue;
 
-			if (odp_unlikely(rx_drops)) {
-				stats->s.rx_drops += rx_drops;
-				if (pkts == rx_drops)
-					continue;
-
-				pkts -= rx_drops;
-			}
+			pkts -= rx_drops;
 		}
 
 		sent = process_pkt(pkt_tbl, pkts, cur_pktio);
@@ -2507,7 +2503,6 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 
 	appl_args->time = 0; /* loop forever if time to run is 0 */
 	appl_args->accuracy = 1; /* get and print pps stats second */
-	appl_args->error_check = 0; /* don't check packet errors by default */
 	appl_args->dsa_mode = 0;
 	appl_args->lan_vid = INVALID_VID;
 	appl_args->aging_time = DEFAULT_AGING_TIME;
