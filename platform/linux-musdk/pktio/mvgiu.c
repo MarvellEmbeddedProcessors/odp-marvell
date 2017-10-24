@@ -53,14 +53,12 @@ static int mvgiu_free_buf(odp_buffer_t buf)
 	pktio_entry = get_pktio_entry(pkt_hdr->input);
 
 	pkt_hdr->input = NULL;
-	buff_inf.cookie = (u64)(uintptr_t)pkt;
+	buff_inf.cookie = (u64)pkt;
 #ifdef MVGIU_NO_HEADROOM
 	odp_packet_reset(pkt, pkt_hdr->frame_len);
-	buff_inf.addr = (bpool_dma_addr_t)
-		mv_sys_dma_mem_virt2phys(odp_packet_data(pkt));
+	buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_data(pkt));
 #else
-	buff_inf.addr = (bpool_dma_addr_t)
-		mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
+	buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
 #endif
 
 	err = giu_bpool_put_buff(pktio_entry->s.pkt_mvgiu.bpool, &buff_inf);
@@ -146,13 +144,11 @@ static int fill_bpool(odp_pool_t	pool,
 		}
 		pkt_hdr->buf_hdr.ext_buf_free_cb = mvgiu_free_buf;
 
-		buff_inf.cookie = (u64)(uintptr_t)pkt;
+		buff_inf.cookie = (u64)pkt;
 #ifdef MVGIU_NO_HEADROOM
-		buff_inf.addr = (bpool_dma_addr_t)
-			mv_sys_dma_mem_virt2phys(odp_packet_data(pkt));
+		buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_data(pkt));
 #else
-		buff_inf.addr = (bpool_dma_addr_t)
-			mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
+		buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
 #endif
 		err = giu_bpool_put_buff(bpool, &buff_inf);
 
@@ -186,7 +182,7 @@ static void flush_bpool(struct giu_bpool *bpool)
 				"(%d of %d) after %d retries\n",
 				bpool->id, i, buf_num, err);
 		}
-		pkt = (odp_packet_t)(uintptr_t)buff.cookie;
+		pkt = (odp_packet_t)buff.cookie;
 		pkt_hdr = odp_packet_hdr(pkt);
 		pkt_hdr->buf_hdr.ext_buf_free_cb = NULL;
 		odp_packet_free(pkt);

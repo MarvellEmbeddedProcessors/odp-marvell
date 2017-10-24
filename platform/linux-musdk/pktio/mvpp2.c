@@ -413,9 +413,8 @@ static int mvpp2_free_buf(odp_buffer_t buf)
 		return -1;
 	}
 
-	buff_inf.cookie = (pp2_cookie_t)pkt;
-	buff_inf.addr   =
-		(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
+	buff_inf.cookie = (u64)pkt;
+	buff_inf.addr   = mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
 	err = pp2_bpool_put_buff(hif, get_pktio_entry(pkt_hdr->input)->s.pkt_mvpp2.bpool, &buff_inf);
 
 	return err;
@@ -458,9 +457,9 @@ static int fill_bpool(odp_pool_t	 pool,
 		}
 		pkt_hdr->buf_hdr.ext_buf_free_cb = mvpp2_free_buf;
 
-		buff_inf.cookie = (pp2_cookie_t)pkt;
+		buff_inf.cookie = (u64)pkt;
 		buff_inf.addr   =
-			(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
+			mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
 		err = pp2_bpool_put_buff(hif, bpool, &buff_inf);
 		if (err != 0)
 			return err;
@@ -499,9 +498,9 @@ static int fill_bpool(odp_pool_t	 pool,
 		pkt_hdr->buf_hdr.ext_buf_free_cb = mvpp2_free_buf;
 
 		buff_array[j].bpool = bpool;
-		buff_array[j].buff.cookie = (pp2_cookie_t)pkt[i];
+		buff_array[j].buff.cookie = (u64)pkt[i];
 		buff_array[j].buff.addr =
-			(bpool_dma_addr_t)mv_sys_dma_mem_virt2phys(odp_packet_head(pkt[i]));
+			mv_sys_dma_mem_virt2phys(odp_packet_head(pkt[i]));
 		j++;
 		if (j == MVPP2_TXQ_SIZE) {
 			num_bufs = j;
@@ -1473,8 +1472,7 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		pp2_ppio_outq_desc_set_cookie(&descs[idx], (u64)pkt;
 		pp2_ppio_outq_desc_set_pool(&descs[idx], pktio_entry->s.pkt_mvpp2.bpool);
 #else
-		shadow_q->ent[shadow_q->write_ind].buff.cookie =
-			(pp2_cookie_t)pkt;
+		shadow_q->ent[shadow_q->write_ind].buff.cookie = (u64)pkt;
 		shadow_q->ent[shadow_q->write_ind].buff.addr = pa;
 
 		input_entry = get_pktio_entry(pkt_hdr->input);
