@@ -33,7 +33,6 @@ extern "C" {
 #include <odp_schedule_if.h>
 #include <stddef.h>
 
-#define MV_NETMAP_BUF_ZERO_COPY
 #define MV_MUSDK_FREE_BUF_SUPPORT
 
 typedef union odp_buffer_bits_t {
@@ -49,16 +48,6 @@ typedef union odp_buffer_bits_t {
 	};
 } odp_buffer_bits_t;
 
-#ifdef MV_NETMAP_BUF_ZERO_COPY
-struct odp_netmap_buf_info {
-	void			*orig_buf;
-	uint32_t		 orig_size;
-	uint16_t		 orig_num_segs;
-	uint16_t		 data_offs;
-	struct netmap_ring	*ring;
-	uint32_t		 buf_idx;	/* buffer index */
-};
-#endif /* MV_NETMAP_BUF_ZERO_COPY */
 #define BUFFER_BURST_SIZE    CONFIG_BURST_SIZE
 
 /* Common buffer header */
@@ -81,14 +70,9 @@ struct odp_buffer_hdr_t {
 	/* Initial buffer data pointer and length */
 	uint8_t  *base_data;
 	uint8_t  *buf_end;
-#ifdef MV_NETMAP_BUF_ZERO_COPY
-	struct odp_netmap_buf_info	netmap_buf_inf;
-#endif /* MV_NETMAP_BUF_ZERO_COPY */
-#if defined(MV_NETMAP_BUF_ZERO_COPY) || defined(MV_MUSDK_FREE_BUF_SUPPORT)
-	int			(*ext_buf_free_cb)(odp_buffer_t buf);
+#ifdef MV_MUSDK_FREE_BUF_SUPPORT
+	int (*ext_buf_free_cb)(odp_buffer_t buf);
 #endif
-
-
 	/* Pool type */
 	int8_t    type;
 

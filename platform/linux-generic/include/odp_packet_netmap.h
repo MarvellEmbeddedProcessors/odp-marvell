@@ -40,10 +40,6 @@ typedef struct  {
 	char *buf;		/**< Slot buffer pointer */
 	uint16_t data_offs;	/**< Slot data offset */
 	uint16_t len;		/**< Slot length */
-#ifdef MV_NETMAP_BUF_ZERO_COPY
-	uint32_t buf_idx;	/* buffer index */
-	struct netmap_ring *ring;
-#endif /* MV_NETMAP_BUF_ZERO_COPY */
 } netmap_slot_t;
 
 /** Packet socket using netmap mmaped rings for both Rx and Tx */
