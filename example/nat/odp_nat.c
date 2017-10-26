@@ -2060,7 +2060,7 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 	int dump_interval = 20;
 	int cur_chunk = 0;
 	uint16_t num_chunks = 512;
-	uint32_t chunk_size = NAT_TBL_SIZE / num_chunks;
+	uint32_t chunk_size;
 	uint32_t aging_start_idx;
 	uint32_t aging_end_idx;
 	int passed_usec = 0;
@@ -2108,6 +2108,8 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 		timeout = 1;
 	}
 
+	chunk_size = NAT_TBL_SIZE / num_chunks;
+
 	/* Wait for all threads to be ready*/
 	odp_barrier_wait(&barrier);
 
@@ -2130,7 +2132,7 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 			if (odp_unlikely(passed_usec >= timeout * 1000)) {
 				passed_usec = 0;
 				elapsed += timeout;
-				++print_counter;
+				print_counter += timeout;
 
 				if (stats_enabled)
 					pkts = print_stats(num_workers,
@@ -2139,7 +2141,7 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 							   &pkts_prev,
 							   &maximum_pps);
 				if (odp_unlikely((gbl_args->appl.print_table ==
-				    1) && (print_counter == 10))) {
+				    1) && (print_counter >= 30))) {
 					print_counter = 0;
 					print_nat_table(gbl_args->snat_tbl,
 							NAT_TBL_SIZE,
@@ -2158,6 +2160,20 @@ static int nat_aging_and_stats(int num_workers, stats_t *thr_stats,
 				pkts = print_stats(num_workers, thr_stats,
 						   timeout, &pkts_prev,
 						   &maximum_pps);
+
+			print_counter += timeout;
+			if (odp_unlikely((gbl_args->appl.print_table ==
+			    1) && (print_counter >= 30))) {
+				print_counter = 0;
+				print_nat_table(gbl_args->snat_tbl,
+						NAT_TBL_SIZE,
+						NAT_TBL_DEPTH,
+						"SNAT Table Dump");
+				print_nat_table(gbl_args->dnat_tbl,
+						NAT_TBL_SIZE,
+						NAT_TBL_DEPTH,
+						"DNAT Table Dump");
+			}
 
 			elapsed += timeout;
 		}
