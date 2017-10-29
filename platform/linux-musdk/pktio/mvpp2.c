@@ -1349,7 +1349,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			pkt = pkt_table[total_got];
 			pkt_hdr = odp_packet_hdr(pkt);
 
-			odp_packet_reset(pkt, len);
+			packet_init(pkt_hdr, len);
 			pkt_hdr->input = pktio_entry->s.handle;
 
 			pp2_ppio_inq_desc_get_l3_info(&descs[j], &l3_type, &l3_offset);

@@ -516,12 +516,8 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 			pkt = pkt_table[total_got];
 			pkt_hdr = odp_packet_hdr(pkt);
 
-			err = odp_packet_reset(pkt, len);
-			if (odp_unlikely(err)) {
-				ODP_ERR("odp_packet_reset failed\n");
-				odp_packet_free(pkt);
-				continue;
-			}
+			packet_init(pkt_hdr, len);
+
 			pkt_hdr->input = pktio_entry->s.handle;
 			parse(pkt_hdr, len);
 			total_got++;
