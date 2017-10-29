@@ -1272,6 +1272,10 @@ static inline void parse_other_l4_protocol(odp_packet_hdr_t *pkt_hdr)
 	case _ODP_IPPROTO_SCTP:
 		pkt_hdr->p.input_flags.sctp = 1;
 		break;
+	default:
+		pkt_hdr->p.input_flags.l4 = 0;
+		pkt_hdr->p.l4_offset = ODP_PACKET_OFFSET_INVALID;
+		break;
 	}
 }
 
@@ -1279,12 +1283,10 @@ static inline void parse_l4(odp_packet_hdr_t *pkt_hdr,
 			    enum pp2_inq_l4_type type,
 			    u8 offset)
 {
-	if (odp_unlikely(type == PP2_INQ_L4_TYPE_NA))
-		return;
-
 	pkt_hdr->p.l4_offset = offset;
 	pkt_hdr->p.input_flags.l4 = 1;
-	if (odp_likely(type != PP2_INQ_L4_TYPE_OTHER)) {
+	if (odp_likely((type != PP2_INQ_L4_TYPE_OTHER) &&
+		       (type != PP2_INQ_L4_TYPE_NA))) {
 		pkt_hdr->p.input_flags.tcp =
 			(type == PP2_INQ_L4_TYPE_TCP);
 		pkt_hdr->p.input_flags.udp =

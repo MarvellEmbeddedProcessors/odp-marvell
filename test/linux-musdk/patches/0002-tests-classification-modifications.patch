@@ -1,4 +1,4 @@
-From bb692909af32a375f17cca24ae54b1d5e6f884de Mon Sep 17 00:00:00 2001
+From 7db321004377b6486bb9901e888c8a74fd1792a4 Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Wed, 11 Oct 2017 01:37:38 +0300
 Subject: [PATCH 2/2] tests: classification modifications
@@ -15,10 +15,10 @@ Signed-off-by: Liron Himi <lironh@marvell.com>
  6 files changed, 166 insertions(+), 9 deletions(-)
 
 diff --git a/platform/linux-generic/odp_pool.c b/platform/linux-generic/odp_pool.c
-index 04c529d..5b49f96 100644
+index 40db8dd..cf078cf 100644
 --- a/platform/linux-generic/odp_pool.c
 +++ b/platform/linux-generic/odp_pool.c
-@@ -542,7 +542,7 @@ int odp_pool_destroy(odp_pool_t pool_hdl)
+@@ -538,7 +538,7 @@ int odp_pool_destroy(odp_pool_t pool_hdl)
  	pool_t *pool = pool_entry_from_hdl(pool_hdl);
  	int i;
  

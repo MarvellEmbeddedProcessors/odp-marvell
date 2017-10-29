@@ -1,4 +1,4 @@
-From 660cba27c336f0a80d95a0a2b570f8e49ca9d9ba Mon Sep 17 00:00:00 2001
+From 9a0aa39e81af503dee379ca667a66dd4a3572582 Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Mon, 18 Sep 2017 12:40:40 +0300
 Subject: [PATCH 1/2] tests: pktio modifications
@@ -11,7 +11,7 @@ Signed-off-by: Liron Himi <lironh@marvell.com>
  2 files changed, 30 insertions(+), 4 deletions(-)
 
 diff --git a/test/common_plat/validation/api/pktio/parser.c b/test/common_plat/validation/api/pktio/parser.c
-index ad7101d..9a08d00 100644
+index ad7101d..abb5538 100644
 --- a/test/common_plat/validation/api/pktio/parser.c
 +++ b/test/common_plat/validation/api/pktio/parser.c
 @@ -119,6 +119,16 @@ static odp_pktio_t create_pktio(int iface_idx, odp_pool_t pool)
@@ -40,17 +40,16 @@ index ad7101d..9a08d00 100644
  	if (strcmp(iface_name[0], "loop") == 0)
  		return ODP_TEST_ACTIVE;
  	else
-@@ -536,8 +548,10 @@ odp_testinfo_t parser_suite[] = {
+@@ -536,7 +548,9 @@ odp_testinfo_t parser_suite[] = {
  	ODP_TEST_INFO(parser_test_ipv4_tcp),
  	ODP_TEST_INFO(parser_test_ipv4_udp),
  	ODP_TEST_INFO_CONDITIONAL(parser_test_vlan_ipv4_udp, loop_pktio),
 +#if 0
  	ODP_TEST_INFO_CONDITIONAL(parser_test_vlan_qinq_ipv4_udp, loop_pktio),
- 	ODP_TEST_INFO(parser_test_ipv6_icmp),
 +#endif
+ 	ODP_TEST_INFO(parser_test_ipv6_icmp),
  	ODP_TEST_INFO(parser_test_ipv6_tcp),
  	ODP_TEST_INFO(parser_test_ipv6_udp),
- 	ODP_TEST_INFO_CONDITIONAL(parser_test_vlan_ipv6_udp, loop_pktio),
 diff --git a/test/common_plat/validation/api/pktio/pktio.c b/test/common_plat/validation/api/pktio/pktio.c
 index c476a71..d615ba0 100644
 --- a/test/common_plat/validation/api/pktio/pktio.c
