@@ -910,6 +910,7 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 			ODP_ERR("can't fill port pool with buffs!\n");
 			return -1;
 		}
+
 		pktio_entry->s.ops->stats_reset(pktio_entry);
 
 		ODP_PRINT("PktIO PP2 has %d RxTCs and %d TxTCs\n",
@@ -1281,6 +1282,20 @@ static inline void parse_l4(odp_packet_hdr_t *pkt_hdr,
 		parse_other_l4_protocol(pkt_hdr);
 }
 
+inline void mvpp2_activate_free_sent_buffers(pktio_entry_t *pktio_entry)
+{
+	struct pp2_hif *hif = get_hif(get_thr_id());
+	struct mvpp2_tx_shadow_q *shadow_q;
+	pkt_mvpp2_t *pkt_mvpp2 = &pktio_entry->s.pkt_mvpp2;
+
+	shadow_q = &pkt_mvpp2->shadow_qs[get_thr_id()][0];
+	if (shadow_q->size)
+		mvpp2_check_n_free_sent_buffers(pkt_mvpp2->ppio,
+						hif,
+						shadow_q,
+						0);
+}
+
 static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		      int rxq_id,
 		      odp_packet_t pkt_table[],
@@ -1294,25 +1309,26 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	enum pp2_inq_l4_type	 l4_type;
 	u8			 l3_offset, l4_offset;
 	u8			 tc, qid, num_qids, last_qid;
+	pkt_mvpp2_t		*mvpp2 = &pktio_entry->s.pkt_mvpp2;
 	enum pp2_inq_desc_status desc_err;
 
 	total_got = 0;
 	if (num_pkts > (MVPP2_MAX_RX_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_RX_TC))
 		num_pkts = MVPP2_MAX_RX_BURST_SIZE * MVPP2_MAX_NUM_QS_PER_RX_TC;
 
-	if (!pktio_entry->s.pkt_mvpp2.inqs[rxq_id].lockless)
-		odp_ticketlock_lock(&pktio_entry->s.pkt_mvpp2.inqs[rxq_id].lock);
+	if (!mvpp2->inqs[rxq_id].lockless)
+		odp_ticketlock_lock(&mvpp2->inqs[rxq_id].lock);
 
 	/* TODO: only support now RSS; no support for QoS; how to translate rxq_id to tc/qid???? */
-	tc = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].first_tc;
-	qid = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].next_qid;
-	num_qids = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].num_qids;
-	last_qid = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].first_qid + num_qids - 1;
+	tc = mvpp2->inqs[rxq_id].first_tc;
+	qid = mvpp2->inqs[rxq_id].next_qid;
+	num_qids = mvpp2->inqs[rxq_id].num_qids;
+	last_qid = mvpp2->inqs[rxq_id].first_qid + num_qids - 1;
 	for (i = 0; (i < num_qids) && (total_got != num_pkts); i++) {
 		num = num_pkts - total_got;
 		if (num > MVPP2_MAX_RX_BURST_SIZE)
 			num = MVPP2_MAX_RX_BURST_SIZE;
-		pp2_ppio_recv(pktio_entry->s.pkt_mvpp2.ppio, tc, qid, descs, &num);
+		pp2_ppio_recv(mvpp2->ppio, tc, qid, descs, &num);
 		for (j = 0; j < num; j++) {
 			if ((num - j) > MVPP2_PREFETCH_SHIFT) {
 				struct pp2_ppio_desc *pref_desc;
@@ -1410,11 +1426,14 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 		}
 		if (!pktio_entry->s.cls_enabled &&
 		    odp_unlikely(qid++ == last_qid))
-			qid = pktio_entry->s.pkt_mvpp2.inqs[rxq_id].first_qid;
+			qid = mvpp2->inqs[rxq_id].first_qid;
 	}
-	pktio_entry->s.pkt_mvpp2.inqs[rxq_id].next_qid = qid;
-	if (!pktio_entry->s.pkt_mvpp2.inqs[rxq_id].lockless)
-		odp_ticketlock_unlock(&pktio_entry->s.pkt_mvpp2.inqs[rxq_id].lock);
+	mvpp2->inqs[rxq_id].next_qid = qid;
+	if (!mvpp2->inqs[rxq_id].lockless)
+		odp_ticketlock_unlock(&mvpp2->inqs[rxq_id].lock);
+
+	if (odp_unlikely(!total_got))
+		activate_free_sent_buffers();
 
 	return total_got;
 }

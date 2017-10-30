@@ -6,8 +6,7 @@
 
 #include <odp_posix_extensions.h>
 
-#include <odp_packet_io_internal.h>
-#include <odp_packet_musdk.h>
+#include <odp_musdk_internal.h>
 #include <odp_debug_internal.h>
 #include <protocols/eth.h>
 #include <protocols/ip.h>
@@ -460,6 +459,19 @@ static inline void parse(odp_packet_hdr_t *pkt_hdr, uint32_t len)
 #endif
 }
 
+inline void mvgiu_activate_free_sent_buffers(pktio_entry_t *pktio_entry)
+{
+	struct mvgiu_tx_shadow_q *shadow_q;
+	pkt_mvgiu_t	*pkt_mvgiu = &pktio_entry->s.pkt_mvgiu;
+
+	shadow_q = &pkt_mvgiu->shadow_qs[0];
+	if (shadow_q->size)
+		mvgiu_check_n_free_sent_buffers(pkt_mvgiu->gpio,
+						shadow_q,
+						0,
+						0);
+}
+
 static int mvgiu_recv(pktio_entry_t *pktio_entry,
 		      int rxq_id,
 		      odp_packet_t pkt_table[],
@@ -467,7 +479,7 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 {
 	odp_packet_hdr_t	*pkt_hdr;
 	odp_packet_t		pkt;
-	pkt_mvgiu_t		*pkt_mvgiu = &pktio_entry->s.pkt_mvgiu;
+	pkt_mvgiu_t		*mvgiu = &pktio_entry->s.pkt_mvgiu;
 	struct giu_gpio_desc	descs[MVGIU_MAX_RX_BURST_SIZE];
 	u16			i, j, num, total_got, len;
 	u8			tc, qid, num_qids, last_qid;
@@ -478,13 +490,13 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 	if (num_pkts > (MVGIU_MAX_RX_BURST_SIZE * MVGIU_MAX_NUM_QS_PER_TC))
 		num_pkts = MVGIU_MAX_RX_BURST_SIZE * MVGIU_MAX_NUM_QS_PER_TC;
 
-	if (!pkt_mvgiu->inqs[rxq_id].lockless)
-		odp_ticketlock_lock(&pkt_mvgiu->inqs[rxq_id].lock);
+	if (!mvgiu->inqs[rxq_id].lockless)
+		odp_ticketlock_lock(&mvgiu->inqs[rxq_id].lock);
 
-	tc = pkt_mvgiu->inqs[rxq_id].first_tc;
-	qid = pkt_mvgiu->inqs[rxq_id].next_qid;
-	num_qids = pkt_mvgiu->inqs[rxq_id].num_qids;
-	last_qid = pkt_mvgiu->inqs[rxq_id].first_qid + num_qids - 1;
+	tc = mvgiu->inqs[rxq_id].first_tc;
+	qid = mvgiu->inqs[rxq_id].next_qid;
+	num_qids = mvgiu->inqs[rxq_id].num_qids;
+	last_qid = mvgiu->inqs[rxq_id].first_qid + num_qids - 1;
 	for (i = 0; (i < num_qids) && (total_got != num_pkts); i++) {
 		num = num_pkts - total_got;
 		if (num > MVPP2_MAX_RX_BURST_SIZE)
@@ -492,7 +504,7 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 #ifdef ODP_MVNMP
 		nmp_schedule();
 #endif /* ODP_MVNMP */
-		giu_gpio_recv(pkt_mvgiu->gpio, tc, qid, descs, &num);
+		giu_gpio_recv(mvgiu->gpio, tc, qid, descs, &num);
 		for (j = 0; j < num; j++) {
 			if ((num - j) > MVGIU_PREFETCH_SHIFT) {
 				struct giu_gpio_desc *pref_desc;
@@ -522,11 +534,14 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 			total_got++;
 		}
 		if (odp_unlikely(qid++ == last_qid))
-			qid = pkt_mvgiu->inqs[rxq_id].first_qid;
+			qid = mvgiu->inqs[rxq_id].first_qid;
 	}
-	pkt_mvgiu->inqs[rxq_id].next_qid = qid;
-	if (!pkt_mvgiu->inqs[rxq_id].lockless)
-		odp_ticketlock_unlock(&pkt_mvgiu->inqs[rxq_id].lock);
+	mvgiu->inqs[rxq_id].next_qid = qid;
+	if (!mvgiu->inqs[rxq_id].lockless)
+		odp_ticketlock_unlock(&mvgiu->inqs[rxq_id].lock);
+
+	if (odp_unlikely(!total_got))
+		activate_free_sent_buffers();
 
 	return total_got;
 }

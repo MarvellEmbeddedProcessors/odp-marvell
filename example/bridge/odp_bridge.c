@@ -283,10 +283,8 @@ static int run_worker(void *arg)
 		}
 
 		pkts = odp_pktin_recv(pktin, pkt_tbl, MAX_PKT_BURST);
-		if (odp_unlikely(pkts <= 0)) {
-			odp_pktout_send(pktout, pkt_tbl, 0);
+		if (odp_unlikely(pkts <= 0))
 			continue;
-		}
 
 		if (gbl_args->appl.error_mode != ERROR_MODE_CHECK_DISABLE) {
 			int rx_drops;
