@@ -2577,7 +2577,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 				exit(EXIT_FAILURE);
 			}
 
-			local_mask = ((1u << mask) - 1) << (32 - mask);
+			local_mask = ((1ull << mask) - 1) << (32 - mask);
 			addr_str2 = strtok(NULL, "/");
 			if (addr_str == NULL) {
 				usage(argv[0]);
