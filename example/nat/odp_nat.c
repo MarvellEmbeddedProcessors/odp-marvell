@@ -1446,6 +1446,11 @@ static inline int send_to_snat(odp_packet_t pkt, uint8_t pkt_from_tap)
 		return 0;
 	}
 
+	if (odp_unlikely((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
+			 (ipv4hdr->proto != ODPH_IPPROTO_TCP) &&
+			 (ipv4hdr->proto != ODPH_IPPROTO_ICMPV4)))
+		return 0;
+
 	if (odp_unlikely(0 != build_hash_search_key(&snat_ipv4, ipv4hdr,
 						    udphdr))) {
 		return 1;
@@ -1526,6 +1531,11 @@ static inline int send_to_dnat(odp_packet_t pkt)
 		}
 		return 0;
 	}
+
+	if (odp_unlikely((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
+			 (ipv4hdr->proto != ODPH_IPPROTO_TCP) &&
+			 (ipv4hdr->proto != ODPH_IPPROTO_ICMPV4)))
+		return 0;
 
 	if (odp_unlikely(0 != build_hash_search_key(&ipv4, ipv4hdr, udphdr)))
 		return 1;
