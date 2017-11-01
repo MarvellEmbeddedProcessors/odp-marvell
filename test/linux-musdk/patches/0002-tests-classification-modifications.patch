@@ -1,4 +1,4 @@
-From 7db321004377b6486bb9901e888c8a74fd1792a4 Mon Sep 17 00:00:00 2001
+From 08a08fd26d38eed3084c403d8f3e494cd38f3dc5 Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Wed, 11 Oct 2017 01:37:38 +0300
 Subject: [PATCH 2/2] tests: classification modifications
@@ -9,10 +9,10 @@ Signed-off-by: Liron Himi <lironh@marvell.com>
  platform/linux-generic/odp_pool.c                  |   2 +-
  .../validation/api/classification/classification.c |   2 +
  .../validation/api/classification/classification.h |  14 ++-
- .../api/classification/odp_classification_common.c |  31 +++++-
- .../api/classification/odp_classification_tests.c  | 124 ++++++++++++++++++++-
- .../classification/odp_classification_testsuites.h |   2 +
- 6 files changed, 166 insertions(+), 9 deletions(-)
+ .../api/classification/odp_classification_common.c |  34 +++++-
+ .../api/classification/odp_classification_tests.c  | 125 ++++++++++++++++++++-
+ .../classification/odp_classification_testsuites.h |   3 +
+ 6 files changed, 171 insertions(+), 9 deletions(-)
 
 diff --git a/platform/linux-generic/odp_pool.c b/platform/linux-generic/odp_pool.c
 index 40db8dd..cf078cf 100644
@@ -88,7 +88,7 @@ index 53c527f..4dee8a6 100644
  /* Test Packet values */
  #define DATA_MAGIC		0x01020304
 diff --git a/test/common_plat/validation/api/classification/odp_classification_common.c b/test/common_plat/validation/api/classification/odp_classification_common.c
-index eca30b8..f1a9ce8 100644
+index eca30b8..66d6ca8 100644
 --- a/test/common_plat/validation/api/classification/odp_classification_common.c
 +++ b/test/common_plat/validation/api/classification/odp_classification_common.c
 @@ -7,8 +7,12 @@
@@ -159,7 +159,17 @@ index eca30b8..f1a9ce8 100644
  	return pktio;
  }
  
-@@ -312,11 +337,11 @@ odp_packet_t create_packet(cls_packet_info_t pkt_info)
+@@ -278,6 +303,9 @@ odp_packet_t create_packet(cls_packet_info_t pkt_info)
+ 	ethhdr = (odph_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+ 	memcpy(ethhdr->src.addr, &src_mac, ODPH_ETHADDR_LEN);
+ 	memcpy(ethhdr->dst.addr, &dst_mac_be, ODPH_ETHADDR_LEN);
++
++	odp_pktio_mac_addr(pkt_info.pktio, ethhdr->dst.addr, ODPH_ETHADDR_LEN);
++
+ 	vlan_type = (odp_u16be_t *)(void *)&ethhdr->type;
+ 	vlan_hdr = (odph_vlanhdr_t *)(ethhdr + 1);
+ 
+@@ -312,11 +340,11 @@ odp_packet_t create_packet(cls_packet_info_t pkt_info)
  		ip->src_addr = odp_cpu_to_be_32(addr);
  		ip->ver_ihl = ODPH_IPV4 << 4 | ODPH_IPV4HDR_IHL_MIN;
  		ip->id = odp_cpu_to_be_16(seqno);
@@ -174,7 +184,7 @@ index eca30b8..f1a9ce8 100644
  	} else {
  		/* ipv6 */
 diff --git a/test/common_plat/validation/api/classification/odp_classification_tests.c b/test/common_plat/validation/api/classification/odp_classification_tests.c
-index 4f43082..d82fcaa 100644
+index 4f43082..1db8a1a 100644
 --- a/test/common_plat/validation/api/classification/odp_classification_tests.c
 +++ b/test/common_plat/validation/api/classification/odp_classification_tests.c
 @@ -8,6 +8,8 @@
@@ -220,7 +230,11 @@ index 4f43082..d82fcaa 100644
  	if (pktio_loop == ODP_PKTIO_INVALID) {
  		ret = odp_pool_destroy(pool_default);
  		if (ret)
-@@ -52,6 +66,8 @@ int classification_suite_init(void)
+@@ -49,9 +63,12 @@ int classification_suite_init(void)
+ 	memset(&default_pkt_info, 0, sizeof(cls_packet_info_t));
+ 	default_pkt_info.pool = pool_default;
+ 	default_pkt_info.seq = &seq;
++	default_pkt_info.pktio = pktio_loop;
  
  	odp_pktin_queue_param_init(&pktin_param);
  	pktin_param.queue_param.sched.sync = ODP_SCHED_SYNC_ATOMIC;
@@ -229,7 +243,7 @@ index 4f43082..d82fcaa 100644
  
  	if (odp_pktin_queue_config(pktio_loop, &pktin_param)) {
  		fprintf(stderr, "pktin queue config failed.\n");
-@@ -63,6 +79,17 @@ int classification_suite_init(void)
+@@ -63,6 +80,17 @@ int classification_suite_init(void)
  		return -1;
  	}
  
@@ -247,7 +261,7 @@ index 4f43082..d82fcaa 100644
  	for (i = 0; i < CLS_ENTRIES; i++)
  		cos_list[i] = ODP_COS_INVALID;
  
-@@ -117,6 +144,7 @@ int classification_suite_term(void)
+@@ -117,6 +145,7 @@ int classification_suite_term(void)
  
  	for (i = 0; i < CLS_ENTRIES; i++)
  		odp_pool_destroy(pool_list[i]);
@@ -255,7 +269,7 @@ index 4f43082..d82fcaa 100644
  
  	return retcode;
  }
-@@ -515,6 +543,96 @@ void test_cos_with_l2_priority(void)
+@@ -515,6 +544,96 @@ void test_cos_with_l2_priority(void)
  	}
  }
  
@@ -352,7 +366,7 @@ index 4f43082..d82fcaa 100644
  void configure_pmr_cos(void)
  {
  	uint16_t val;
-@@ -691,6 +809,8 @@ void classification_test_pktio_configure(void)
+@@ -691,6 +810,8 @@ void classification_test_pktio_configure(void)
  		configure_cls_pmr_chain();
  	if (TEST_L2_QOS)
  		configure_cos_with_l2_priority();
@@ -361,7 +375,7 @@ index 4f43082..d82fcaa 100644
  	if (TEST_PMR)
  		configure_pmr_cos();
  	if (TEST_PMR_SET)
-@@ -708,6 +828,8 @@ void classification_test_pktio_test(void)
+@@ -708,6 +829,8 @@ void classification_test_pktio_test(void)
  		test_cls_pmr_chain();
  	if (TEST_L2_QOS)
  		test_cos_with_l2_priority();
@@ -371,10 +385,18 @@ index 4f43082..d82fcaa 100644
  		test_pmr_cos();
  	if (TEST_PMR_SET)
 diff --git a/test/common_plat/validation/api/classification/odp_classification_testsuites.h b/test/common_plat/validation/api/classification/odp_classification_testsuites.h
-index d296923..ac0a914 100644
+index d296923..68edea7 100644
 --- a/test/common_plat/validation/api/classification/odp_classification_testsuites.h
 +++ b/test/common_plat/validation/api/classification/odp_classification_testsuites.h
-@@ -51,6 +51,8 @@ void configure_cls_pmr_chain(void);
+@@ -13,6 +13,7 @@
+ #include <stdbool.h>
+ 
+ typedef struct cls_packet_info {
++	odp_pktio_t pktio;
+ 	odp_pool_t pool;
+ 	bool	vlan;
+ 	bool	vlan_qinq;
+@@ -51,6 +52,8 @@ void configure_cls_pmr_chain(void);
  void test_cls_pmr_chain(void);
  void configure_cos_with_l2_priority(void);
  void test_cos_with_l2_priority(void);
