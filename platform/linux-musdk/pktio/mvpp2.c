@@ -1494,14 +1494,17 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		}
 		pkt = pkt_table[i];
 		len = odp_packet_len(pkt);
-		if ((len - ODPH_ETHHDR_LEN) > pktio_entry->s.pkt_mvpp2.mtu) {
+		pkt_hdr = odp_packet_hdr(pkt);
+		if (odp_unlikely(
+			(pkt_hdr->p.l3_offset != ODP_PACKET_OFFSET_INVALID) &&
+			((len - pkt_hdr->p.l3_offset) >
+			 pktio_entry->s.pkt_mvpp2.mtu))) {
 			if (i == 0) {
 				__odp_errno = EMSGSIZE;
 				return -1;
 			}
 			break;
 		}
-		pkt_hdr = odp_packet_hdr(pkt);
 		pa = mv_sys_dma_mem_virt2phys((void *)((uintptr_t)odp_packet_head(pkt)));
 		pp2_ppio_outq_desc_reset(&descs[idx]);
 		pp2_ppio_outq_desc_set_phys_addr(&descs[idx], pa);
