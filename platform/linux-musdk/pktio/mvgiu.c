@@ -372,8 +372,8 @@ static int mvgiu_start(pktio_entry_t *pktio_entry)
 	giu_gpio_enable(pktio_entry->s.pkt_mvgiu.gpio);
 
 	ODP_PRINT("PktIO PP2 has %d RxTCs and %d TxTCs\n",
-		  MVPP2_MAX_NUM_TCS_PER_PORT,
-		  MVPP2_MAX_NUM_TCS_PER_PORT);
+		  MVPP2_MAX_NUM_RX_TCS_PER_PORT,
+		  MVPP2_MAX_NUM_TX_TCS_PER_PORT);
 	ODP_PRINT("\t mapped to %d RxQs and %d TxQs!!!\n",
 		  pktio_entry->s.num_in_queue, pktio_entry->s.num_out_queue);
 
