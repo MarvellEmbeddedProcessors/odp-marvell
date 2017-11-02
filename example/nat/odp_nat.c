@@ -291,8 +291,6 @@ static args_t *gbl_args;
 /** Global barrier to synchronize main and workers */
 static odp_barrier_t barrier;
 
-static odp_pool_t gbl_tap_pool;
-
 static uint16_t net_cksum(uint8_t *ptr, int len)
 {
 	unsigned long xsum;
@@ -2817,7 +2815,7 @@ static void sig_int_handler(int sig)
 int main(int argc, char *argv[])
 {
 	odph_odpthread_t thread_tbl[MAX_WORKERS];
-	odp_pool_t pool, pool_tap;
+	odp_pool_t pool;
 	int i;
 	int cpu;
 	int num_workers;
@@ -2917,14 +2915,6 @@ int main(int argc, char *argv[])
 	}
 	odp_pool_print(pool);
 
-	pool_tap = odp_pool_create("packet tap pool", &params);
-	gbl_tap_pool = pool_tap;
-	if (pool_tap == ODP_POOL_INVALID) {
-		printf("Error: packet pool create failed.\n");
-		exit(EXIT_FAILURE);
-	}
-	odp_pool_print(pool_tap);
-
 	bind_workers();
 
 	for (i = 0; i < if_count; ++i) {
@@ -2934,8 +2924,7 @@ int main(int argc, char *argv[])
 		num_rx = gbl_args->pktios[i].num_rx_thr;
 		num_tx = gbl_args->pktios[i].num_tx_thr;
 
-		if (create_pktio(dev, i, num_rx, num_tx,
-			(i >= gbl_args->appl.if_phy_count) ? pool_tap : pool))
+		if (create_pktio(dev, i, num_rx, num_tx, pool))
 			exit(EXIT_FAILURE);
 	}
 
@@ -3017,11 +3006,6 @@ int main(int argc, char *argv[])
 	free(gbl_args->appl.if_wan_str);
 
 	if (odp_pool_destroy(pool)) {
-		printf("Error: pool destroy\n");
-		exit(EXIT_FAILURE);
-	}
-
-	if (odp_pool_destroy(pool_tap)) {
 		printf("Error: pool destroy\n");
 		exit(EXIT_FAILURE);
 	}
