@@ -45,6 +45,7 @@
  * @brief Buffer size of the packet pool buffer
  */
 #define SHM_PKT_POOL_BUF_SIZE  1856
+#define SHM_PKT_POOL_BUF_SIZE_GIU  2048
 
 /** @def MAX_PKT_BURST
  * @brief Maximum number of packet in a burst
@@ -905,6 +906,18 @@ static void gbl_args_init(args_t *args)
 	}
 }
 
+static int is_giu_interface(void)
+{
+	int if_count = gbl_args->appl.if_count;
+	int i;
+
+	for (i = 0; i < if_count; ++i)
+		if (strstr(gbl_args->appl.if_names[i], "giu") != NULL)
+			return 1;
+
+	return 0;
+}
+
 /**
  * ODP L2 forwarding main function
  */
@@ -1000,6 +1013,16 @@ int main(int argc, char *argv[])
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
 	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
+
+	/* If giu is one of the "bridged" interfaces, then change the buffer
+	 * size to 2K.
+	 */
+	if (is_giu_interface()) {
+		printf("Using GIU interface, setting the pool's min pkt len to %d.\n",
+		       SHM_PKT_POOL_BUF_SIZE_GIU);
+		params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE_GIU;
+		params.pkt.len     = SHM_PKT_POOL_BUF_SIZE_GIU;
+	}
 	if (gbl_args->appl.num_buffers_per_queue == 0)
 		gbl_args->appl.num_buffers_per_queue = SHM_PKT_POOL_SIZE_PER_QUEUE;
 
