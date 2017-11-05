@@ -968,7 +968,7 @@ static inline int build_hash_search_key(ipv4_5tuple_t *tuple,
 	tuple->protocol = ipv4hdr->proto;
 	tuple->pad1 = 0;
 	tuple->pad2 = 0;
-	if (odp_likely(tuple->protocol != ODPH_IPPROTO_ICMPv4)) {
+	if (odp_likely(tuple->protocol != ODPH_IPPROTO_ICMPV4)) {
 		tuple->src_port = ntohs(udphdr->src_port);
 		tuple->dst_port = ntohs(udphdr->dst_port);
 	} else {
@@ -1092,7 +1092,7 @@ static inline void do_snat(odph_ipv4hdr_t *ipv4hdr, odph_udphdr_t *udphdr,
 		tcphdr->src_port = ntohs(target_port);
 		tcphdr->cksm = 0;
 		break;
-	case ODPH_IPPROTO_ICMPv4:
+	case ODPH_IPPROTO_ICMPV4:
 		icmphdr->un.echo.id = ntohs(target_port);
 		icmphdr->chksum = 0;
 		icmphdr->chksum = ~net_cksum((uint8_t *)icmphdr,
@@ -1126,7 +1126,7 @@ static inline void do_dnat(odph_ipv4hdr_t *ipv4hdr, odph_udphdr_t *udphdr,
 		tcphdr->dst_port = htons(target_port);
 		tcphdr->cksm = 0;
 		break;
-	case ODPH_IPPROTO_ICMPv4:
+	case ODPH_IPPROTO_ICMPV4:
 		icmphdr->un.echo.id = htons(target_port);
 		icmphdr->chksum = 0;
 		icmphdr->chksum = ~net_cksum((uint8_t *)icmphdr,
@@ -1183,7 +1183,7 @@ static inline int learn_nat_entry(ipv4_5tuple_t snat_ipv4, uint32_t hash_value,
 	case ODPH_IPPROTO_TCP:
 		nat_pool = &port_pool->tcp_port_pool;
 		break;
-	case ODPH_IPPROTO_ICMPv4:
+	case ODPH_IPPROTO_ICMPV4:
 		nat_pool = &port_pool->icmp_id_pool;
 		break;
 	default:
@@ -1250,7 +1250,7 @@ static inline int learn_nat_entry(ipv4_5tuple_t snat_ipv4, uint32_t hash_value,
 		dnat_ipv4.dst_ip = snat_ptr->target_ip;
 		dnat_ipv4.pad1 = 0;
 		dnat_ipv4.pad2 = 0;
-		if (odp_unlikely(snat_ipv4.protocol == ODPH_IPPROTO_ICMPv4)) {
+		if (odp_unlikely(snat_ipv4.protocol == ODPH_IPPROTO_ICMPV4)) {
 			dnat_ipv4.src_port = snat_entry.target_port;
 			dnat_ipv4.dst_port = 0;
 		}
@@ -1385,7 +1385,7 @@ static inline int supported_dsa_l3_pkt(odp_packet_t pkt)
 		return 0;
 	if ((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
 	    (ipv4hdr->proto != ODPH_IPPROTO_TCP) &&
-	    (ipv4hdr->proto != ODPH_IPPROTO_ICMPv4))
+	    (ipv4hdr->proto != ODPH_IPPROTO_ICMPV4))
 		return 0;
 
 	return 1;
@@ -1402,7 +1402,7 @@ static inline int supported_l3_pkt(odp_packet_t pkt)
 		return 0;
 	if ((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
 	    (ipv4hdr->proto != ODPH_IPPROTO_TCP) &&
-	    (ipv4hdr->proto != ODPH_IPPROTO_ICMPv4))
+	    (ipv4hdr->proto != ODPH_IPPROTO_ICMPV4))
 		return 0;
 
 	return 1;

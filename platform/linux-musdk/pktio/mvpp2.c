@@ -1254,8 +1254,8 @@ static inline void parse_other_l4_protocol(odp_packet_hdr_t *pkt_hdr)
 
 	/* Parse Layer 4 headers */
 	switch (proto) {
-	case _ODP_IPPROTO_ICMPv4:
-	case _ODP_IPPROTO_ICMPv6:
+	case _ODP_IPPROTO_ICMPV4:
+	case _ODP_IPPROTO_ICMPV6:
 		pkt_hdr->p.input_flags.icmp = 1;
 		break;
 
