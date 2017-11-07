@@ -6,7 +6,7 @@
 
 #include <odp_posix_extensions.h>
 
-#include <odp_packet_io_internal.h>
+#include <odp_musdk_internal.h>
 #include <odp_packet_socket.h>
 #include <odp_debug_internal.h>
 #include <odp/helper/eth.h>
@@ -774,7 +774,7 @@ static int mvpp2_close(pktio_entry_t *pktio_entry)
 	struct pp2_hif *hif = thds[get_thr_id()].hif;
 	struct mvpp2_tx_shadow_q *shadow_q;
 
-	mvpp2_deinit_cls(pktio_entry->s.handle);
+	mvpp2_deinit_cls(pktio_entry);
 
 	if (pktio_entry->s.pkt_mvpp2.ppio) {
 		for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++) {
@@ -919,8 +919,8 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 			  pktio_entry->s.pkt_mvpp2.num_inqs,
 			  pktio_entry->s.num_out_queue);
 
-		mvpp2_init_cls(pktio_entry->s.handle);
-		mvpp2_update_qos(pktio_entry->s.handle);
+		mvpp2_init_cls(pktio_entry);
+		mvpp2_update_qos(pktio_entry);
 	}
 
 	pp2_ppio_set_loopback(pktio_entry->s.pkt_mvpp2.ppio, pktio_entry->s.config.enable_loop);
@@ -1398,7 +1398,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			if (pktio_entry->s.cls_enabled) {
 				int err;
 
-				err = mvpp2_cls_select_cos(pkt_hdr->input,
+				err = mvpp2_cls_select_cos(pktio_entry,
 							   &pkt,
 							   tc);
 				if (err)

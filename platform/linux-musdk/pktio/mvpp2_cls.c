@@ -5,7 +5,7 @@
  */
 
 #include <odp_posix_extensions.h>
-#include <odp_packet_io_internal.h>
+#include <odp_musdk_internal.h>
 
 #include <odp/api/plat/ticketlock_inlines.h>
 #define LOCK(a)      _odp_ticketlock_lock(a)
@@ -87,9 +87,8 @@ static cos_t *get_cos(pktio_entry_t *pktio_entry,
 	return cos;
 }
 
-void mvpp2_init_cls(odp_pktio_t pktio)
+void mvpp2_init_cls(pktio_entry_t *entry)
 {
-	pktio_entry_t *entry = get_pktio_entry(pktio);
 	uint32_t i;
 
 	LOCK_INIT(&entry->s.pkt_mvpp2.l2_l3_cos_lock);
@@ -103,10 +102,8 @@ void mvpp2_init_cls(odp_pktio_t pktio)
 			entry->s.pkt_mvpp2.ppio;
 }
 
-void mvpp2_deinit_cls(odp_pktio_t pktio)
+void mvpp2_deinit_cls(pktio_entry_t *entry)
 {
-	pktio_entry_t *entry = get_pktio_entry(pktio);
-
 	if (!entry->s.pkt_mvpp2.ppio)
 		return;
 
@@ -114,10 +111,8 @@ void mvpp2_deinit_cls(odp_pktio_t pktio)
 		pp2_cls_qos_tbl_deinit(entry->s.pkt_mvpp2.qos_tbl);
 }
 
-int mvpp2_update_qos(odp_pktio_t pktio)
+int mvpp2_update_qos(pktio_entry_t *entry)
 {
-	pktio_entry_t *entry = get_pktio_entry(pktio);
-
 	if (!entry->s.pkt_mvpp2.ppio)
 		return 0;
 
@@ -131,7 +126,7 @@ int mvpp2_update_qos(odp_pktio_t pktio)
 	return 0;
 }
 
-inline int mvpp2_cls_select_cos(odp_pktio_t pktio,
+inline int mvpp2_cls_select_cos(pktio_entry_t *entry,
 				odp_packet_t *pkt,
 				int hw_rxq_id)
 {
@@ -140,7 +135,6 @@ inline int mvpp2_cls_select_cos(odp_pktio_t pktio,
 	odp_packet_hdr_t *pkt_hdr = odp_packet_hdr(*pkt);
 	odp_packet_t new_pkt;
 	cos_t *cos = NULL;
-	pktio_entry_t *entry = get_pktio_entry(pktio);
 
 	if (pkt_hdr->p.error_flags.all)
 		cos = get_cos(entry, pkt_hdr, MVPP2_RECV_ERROR_QUEUE);
@@ -198,7 +192,7 @@ int mvpp2_cos_with_l2_priority(pktio_entry_t *entry,
 			qos_tbl_params->pcp_cos_map[qos_table[i]].tc =
 				MVPP2_CLS_COS0_HWQ + i;
 
-	ret = mvpp2_update_qos(entry->s.handle);
+	ret = mvpp2_update_qos(entry);
 	UNLOCK(&entry->s.pkt_mvpp2.l2_l3_cos_lock);
 	if (ret != 0)
 		return -1;
@@ -228,7 +222,7 @@ int mvpp2_cos_with_l3_priority(pktio_entry_t *entry,
 			qos_tbl_params->dscp_cos_map[qos_table[i]].tc =
 				MVPP2_CLS_COS0_HWQ + i;
 
-	ret = mvpp2_update_qos(entry->s.handle);
+	ret = mvpp2_update_qos(entry);
 	UNLOCK(&entry->s.pkt_mvpp2.l2_l3_cos_lock);
 	if (ret != 0)
 		return -1;

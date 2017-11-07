@@ -132,11 +132,4 @@ typedef struct {
 } pkt_mvgiu_t;
 #endif /* ODP_PKTIO_MVGIU */
 
-void mvpp2_init_cls(odp_pktio_t pktio);
-void mvpp2_deinit_cls(odp_pktio_t pktio);
-int mvpp2_update_qos(odp_pktio_t pktio);
-int mvpp2_cls_select_cos(odp_pktio_t pktio,
-			 odp_packet_t *pkt,
-			 int hw_rxq_id);
-
 #endif /* ODP_PACKET_MUSDK_H_ */
