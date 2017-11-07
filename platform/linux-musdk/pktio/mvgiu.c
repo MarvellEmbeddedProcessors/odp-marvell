@@ -471,7 +471,6 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 	struct giu_gpio_desc	descs[MVGIU_MAX_RX_BURST_SIZE];
 	u16			i, j, num, total_got, len;
 	u8			tc, qid, num_qids, last_qid;
-	int			err;
 #ifdef MVGIU_SW_PARSE
 #endif
 
