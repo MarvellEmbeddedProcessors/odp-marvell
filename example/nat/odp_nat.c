@@ -574,26 +574,24 @@ static void ip_table_add_entry(uint32_t subnet, uint32_t mask, uint32_t public_s
 
 static void *odp_nat_packet_l3_ptr(odp_packet_t pkt, uint32_t *offset, uint16_t *ethtype)
 {
-	odph_ethhdr_t *eth;
 	odph_vlanhdr_t *vlan;
 	uint8_t *parseptr;
 
 	if (odp_packet_has_eth(pkt)) {
-		*offset = sizeof(odph_ethhdr_t);
-		eth = (odph_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-		*ethtype = odp_be_to_cpu_16(eth->type);
-		parseptr = (uint8_t *)(eth + 1);
-
 		if (gbl_args->appl.dsa_mode) {
 			odph_dsa_ethhdr_t *eth;
 			*offset = sizeof(odph_dsa_ethhdr_t);
 			eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+			if (odp_unlikely(!eth))
+				return NULL;
 			*ethtype = odp_be_to_cpu_16(eth->type);
 			parseptr = (uint8_t *)(eth + 1);
 		} else {
 			odph_ethhdr_t *eth;
 		        *offset = sizeof(odph_ethhdr_t);
 		        eth = (odph_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+			if (odp_unlikely(!eth))
+				return NULL;
 		        *ethtype = odp_be_to_cpu_16(eth->type);
 		        parseptr = (uint8_t *)(eth + 1);
 		}
@@ -637,6 +635,8 @@ static inline int swap_dsa_to_vlanhdr(odp_packet_t pkt)
 	odph_nat_vlanhdr_t	vlan_hdr;
 
 	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+	if (odp_unlikely(!eth))
+		return 1;
 	vlan_hdr.eth_type = odp_cpu_to_be_16(ODPH_ETHTYPE_VLAN);
 	vlan_hdr.vlan = odp_cpu_to_be_16((odp_be_to_cpu_16(eth->dsa.vid) &
 			VID_MASK));
@@ -671,6 +671,8 @@ static inline int swap_vlanhdr_to_dsa(odp_packet_t pkt)
 	uint16_t		eth_type;
 
 	l2hdr = (odph_vlan_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+	if (odp_unlikely(!l2hdr))
+		return 1;
 	eth_type = odp_be_to_cpu_16(l2hdr->type);
 	if (odp_likely(eth_type == ODPH_ETHTYPE_VLAN))
 		vid = odp_be_to_cpu_16(l2hdr->vlan);
@@ -729,7 +731,7 @@ static int process_tocpu_lan(odp_packet_t pkt, int strip_dsa)
 		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 		printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -763,7 +765,7 @@ static int process_tocpu_wan(odp_packet_t pkt)
 		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 		printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -792,7 +794,7 @@ static int process_fromcpu_lan(odp_packet_t pkt)
 		printf("Sending to %s\n",
 		       gbl_args->appl.if_names[pktio.tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -821,7 +823,7 @@ static int process_fromcpu_wan(odp_packet_t pkt)
 		printf("Sending to %s\n",
 		       gbl_args->appl.if_names[pktio.tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -1006,6 +1008,8 @@ static inline void snat_dsa_processing(odp_packet_t pkt)
 	unsigned char src_dev_id, dst_dev_id;
 
 	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+	if (odp_unlikely(!eth))
+		return;
 	/* swap Source and Dest DevID of DSA tag */
 	src_dev_id = eth->dsa.src_dev & DEV_ID_MASK;
 	dst_dev_id = eth->dsa.dst_dev & DEV_ID_MASK;
@@ -1030,7 +1034,7 @@ static inline int send_fromcpu_after_snat(odp_packet_t pkt)
 		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 		printf("Packet from CPU after SNAT\n");
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -1298,6 +1302,8 @@ static inline int process_new_entry(odp_packet_t pkt)
 
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
 							  &ethtype);
+	if (odp_unlikely(!ipv4hdr))
+		return 0;
 
 	/* For IPv6, don't do anything */
 	if (odp_unlikely(ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) == ODPH_IPV6))
@@ -1306,8 +1312,7 @@ static inline int process_new_entry(odp_packet_t pkt)
 	/* udphdr is L4 header, could be udp, tcp or icmp header */
 	udphdr = (odph_udphdr_t *)odp_nat_packet_l4_ptr(pkt, ipv4hdr, l3_offset,
 							ethtype);
-
-	if (odp_unlikely(!(ipv4hdr && udphdr)))
+	if (odp_unlikely(!udphdr))
 		return 0;
 
 	if (odp_unlikely(0 != build_hash_search_key(&ipv4, ipv4hdr,
@@ -1393,6 +1398,9 @@ static inline int send_to_snat(odp_packet_t pkt, uint8_t pkt_from_tap)
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
 							  &ethtype);
 
+	if (odp_unlikely(!ipv4hdr))
+		return 0;
+
 	/* For IPv6, don't do anything */
 	if (odp_unlikely(ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) == ODPH_IPV6))
 		return 0;
@@ -1400,21 +1408,12 @@ static inline int send_to_snat(odp_packet_t pkt, uint8_t pkt_from_tap)
 	/* udphdr is L4 header, could be udp, tcp or icmp header */
 	udphdr = (odph_udphdr_t *)odp_nat_packet_l4_ptr(pkt, ipv4hdr, l3_offset,
 							ethtype);
+	if (odp_unlikely(!udphdr))
+		return 0;
+
 	if (odp_likely(gbl_args->appl.dsa_mode)) {
 		if (odp_likely(pkt_from_tap == 0))
 			snat_dsa_processing(pkt);
-	}
-
-	if (odp_unlikely(!(ipv4hdr && udphdr))) {
-		if (odp_unlikely(gbl_args->appl.debug_mode)) {
-			if (!udphdr) {
-				printf("send_to_snat invalid udphdr. ");
-				printf("check ethtype after DSA header\n");
-			} else {
-				printf("send_to_snat invalid ipv4hdr\n");
-			}
-		}
-		return 0;
 	}
 
 	if (odp_unlikely((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
@@ -1484,6 +1483,9 @@ static inline int send_to_dnat(odp_packet_t pkt)
 
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
 							  &ethtype);
+	if (odp_unlikely(!ipv4hdr))
+		return 0;
+
 	/* For IPv6, don't do anything */
 	if (odp_unlikely(ODPH_IPV4HDR_VER(ipv4hdr->ver_ihl) == ODPH_IPV6))
 		return 0;
@@ -1491,17 +1493,8 @@ static inline int send_to_dnat(odp_packet_t pkt)
 	udphdr = (odph_udphdr_t *)odp_nat_packet_l4_ptr(pkt, ipv4hdr, l3_offset,
 							ethtype);
 
-	if (odp_unlikely(!(ipv4hdr && udphdr))) {
-		if (odp_unlikely(gbl_args->appl.debug_mode)) {
-			if (!udphdr) {
-				printf("send_to_dnat invalid udphdr. ");
-				printf("check ethtype after DSA header\n");
-			} else {
-				printf("send_to_dnat invalid ipv4hdr\n");
-			}
-		}
+	if (odp_unlikely(!udphdr))
 		return 0;
-	}
 
 	if (odp_unlikely((ipv4hdr->proto != ODPH_IPPROTO_UDP) &&
 			 (ipv4hdr->proto != ODPH_IPPROTO_TCP) &&
@@ -1561,7 +1554,9 @@ static inline odph_nat_pkt_type_e get_pkt_type(odp_packet_t pkt, odp_nat_pktio_t
     } else {
         // From physical interfaces
         if (pktio->rx_idx < gbl_args->appl.if_phy_count) {
-            eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+		eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+		if (odp_unlikely(!eth))
+			return PKT_TYPE_UNKNOWN;
 
             // Learn the device ID
             gbl_args->appl.src_dev_id = ntohs(eth->dsa.src_dev) & DEV_ID_MASK;
@@ -1614,9 +1609,8 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 			uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 			printf("Rx from interface %s\n", gbl_args->appl.if_names[pktio->rx_idx]);
 
-			for (j = 0; j < 64; j++) {
+			for (j = 0; (j < 64) && data; j++)
 				printf("%02x ", data[j]);
-			}
 			printf("\n");
 		}
 
@@ -1693,9 +1687,8 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
                     uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
                     printf("After processing:\n");
 
-                    for (j = 0; j < 64; j++) {
-                        printf("%02x ", data[j]);
-                    }
+			for (j = 0; (j < 64) && data; j++)
+				printf("%02x ", data[j]);
                     printf("\n");
                     printf("Sending to  %s\n", gbl_args->appl.if_names[pktio->tx_idx]);
                 }
@@ -1778,6 +1771,7 @@ static int run_worker(void *arg)
 
 	odp_barrier_wait(&barrier);
 
+	sleep(1);
 	/* Loop packets */
 	while (!exit_threads) {
 		int sent;
