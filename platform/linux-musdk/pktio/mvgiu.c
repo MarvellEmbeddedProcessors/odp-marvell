@@ -24,6 +24,12 @@
 #define MVGIU_NO_HEADROOM
 #define MVGIU_SW_PARSE
 
+#ifdef ODP_MVNMP
+extern struct nmp *nmp;
+
+extern void nmp_schedule_all(struct nmp *nmp);
+#endif
+
 static int mvgiu_free_buf(odp_buffer_t buf)
 {
 	odp_packet_t pkt = _odp_packet_from_buffer(buf);
@@ -472,6 +478,15 @@ inline void mvgiu_activate_free_sent_buffers(pktio_entry_t *pktio_entry)
 						0);
 }
 
+#ifdef ODP_MVNMP
+static void nmp_scheduling(struct nmp *nmp)
+{
+	nmp_schedule(nmp, NMP_SCHED_MNG);
+	nmp_schedule(nmp, NMP_SCHED_RX);
+	nmp_schedule(nmp, NMP_SCHED_TX);
+}
+#endif /* ODP_MVNMP */
+
 static int mvgiu_recv(pktio_entry_t *pktio_entry,
 		      int rxq_id,
 		      odp_packet_t pkt_table[],
@@ -502,7 +517,7 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 		if (num > MVPP2_MAX_RX_BURST_SIZE)
 			num = MVPP2_MAX_RX_BURST_SIZE;
 #ifdef ODP_MVNMP
-		nmp_schedule();
+		nmp_schedule_all(nmp);
 #endif /* ODP_MVNMP */
 		giu_gpio_recv(mvgiu->gpio, tc, qid, descs, &num);
 		for (j = 0; j < num; j++) {
@@ -639,7 +654,7 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 			num = idx;
 			giu_gpio_send(pkt_mvgiu->gpio, tc, txq_id, descs, &num);
 #ifdef ODP_MVNMP
-			nmp_schedule();
+			nmp_schedule_all(nmp);
 #endif /* ODP_MVNMP */
 			sent += num;
 			/* In case not all frames were send we need to decrease
@@ -660,7 +675,7 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 	num = idx;
 	giu_gpio_send(pkt_mvgiu->gpio, tc, txq_id, descs, &num);
 #ifdef ODP_MVNMP
-	nmp_schedule();
+	nmp_schedule_all(nmp);
 #endif /* ODP_MVNMP */
 	sent += num;
 

@@ -28,6 +28,12 @@
 #include <odp_packet_musdk.h>
 #endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
 
+#ifdef ODP_MVNMP
+struct nmp *nmp;
+
+void nmp_schedule_all(struct nmp *nmp);
+#endif /* ODP_MVNMP */
+
 struct odp_global_data_s odp_global_data;
 
 /* remove all files staring with "odp-<pid>" from a directory "dir" */
@@ -71,6 +77,45 @@ static int cleanup_files(const char *dirpath, int odp_pid)
 
 	return 0;
 }
+
+#ifdef ODP_MVNMP
+static int nmp_init_all(struct nmp *nmp)
+{
+	int ret;
+	struct nmp_params params;
+
+	/* NMP parameters allocate */
+	params.lfs_params =
+		kcalloc(1, sizeof(union nmp_lf_params), GFP_KERNEL);
+	if (params.lfs_params == NULL)
+		return -1;
+
+	/* NMP profile parameters */
+	params.lfs_params->pf.lcl_egress_q_num   = 1;
+	params.lfs_params->pf.lcl_egress_q_size  = 2048;
+	params.lfs_params->pf.lcl_ingress_q_num  = 1;
+	params.lfs_params->pf.lcl_ingress_q_size = 2048;
+	params.lfs_params->pf.lcl_bm_q_num       = 1;
+	params.lfs_params->pf.lcl_bm_q_size      = 2048;
+	params.lfs_params->pf.lcl_bm_buf_size    = 2048;
+
+	/* NMP initialization */
+	ret = nmp_init(&params, &nmp);
+
+	/* NMP parameters release */
+	kfree(params.lfs_params);
+
+	return ret;
+}
+
+void nmp_schedule_all(struct nmp *nmp)
+{
+	/* nmp gir instances schedule */
+	nmp_schedule(nmp, NMP_SCHED_MNG);
+	nmp_schedule(nmp, NMP_SCHED_RX);
+	nmp_schedule(nmp, NMP_SCHED_TX);
+}
+#endif /* ODP_MVNMP */
 
 int odp_init_global(odp_instance_t *instance,
 		    const odp_init_t *params,
@@ -153,8 +198,12 @@ int odp_init_global(odp_instance_t *instance,
 	stage = SCHED_INIT;
 
 #ifdef ODP_MVNMP
-	nmp_init();
+	if (nmp_init_all(nmp)) {
+		ODP_ERR("ODP nmp init failed.\n");
+		goto init_failed;
+	}
 #endif /* ODP_MVNMP */
+
 	if (odp_pktio_init_global()) {
 		ODP_ERR("ODP packet io init failed.\n");
 		goto init_failed;
@@ -215,7 +264,7 @@ int odp_init_global(odp_instance_t *instance,
 	/* wait for regfile to be opened by NMP */
 	do {
 #ifdef ODP_MVNMP
-		nmp_schedule();
+		nmp_schedule_all(nmp);
 #endif /* ODP_MVNMP */
 		fd = open(file_name, O_RDWR);
 		if (fd > 0)
@@ -231,7 +280,7 @@ int odp_init_global(odp_instance_t *instance,
 
 #ifdef ODP_MVNMP
 	/* Make sure that last command response is sent to host. */
-	nmp_schedule();
+	nmp_schedule_all(nmp);
 #endif /* ODP_MVNMP */
 
 #endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
