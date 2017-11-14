@@ -1596,6 +1596,7 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 	unsigned i;
 	int proceed = 0;//0: to send, 1: to drop, 2: been sent
 	int sent = 0;
+	int to_send = 0;
 	int control_sent = 0;
 	int res;
 
@@ -1681,7 +1682,7 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 
         switch (proceed) {
             case 0:
-                send_pkt_tbl[sent++] = pkt;
+		send_pkt_tbl[to_send++] = pkt;
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     int j;
                     uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
@@ -1707,8 +1708,13 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
         }
 	}
 
-	if (odp_likely(sent))
-		sent = odp_pktout_send(pktio->pktout, send_pkt_tbl, sent);
+	if (odp_likely(to_send)) {
+		sent = odp_pktout_send(pktio->pktout, send_pkt_tbl, to_send);
+		if (odp_unlikely(to_send > sent))
+			/* Drop rejected packets */
+			odp_packet_free_multi(&send_pkt_tbl[sent],
+					      to_send - sent);
+	}
 
 	return (sent + control_sent);
 }
@@ -1804,17 +1810,8 @@ static int run_worker(void *arg)
 		sent = odp_unlikely(sent < 0) ? 0 : sent;
 		tx_drops = pkts - sent;
 
-		if (odp_unlikely(tx_drops)) {
-			int i;
-
+		if (odp_unlikely(tx_drops))
 			stats->s.tx_drops += tx_drops;
-
-#if 0
-			/* Drop rejected packets */
-			for (i = sent; i < pkts; i++)
-				odp_packet_free(pkt_tbl[i]);
-#endif
-		}
 
 		stats->s.packets += pkts;
 	}
