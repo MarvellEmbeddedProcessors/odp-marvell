@@ -216,7 +216,7 @@ typedef struct {
 	uint32_t dst_ip;         /**< SA dest IP address */
 
 	/* Output only */
-	odp_crypto_op_params_t params;  /**< Parameters for crypto call */
+	odp_crypto_op_param_t  params;  /**< Parameters for crypto call */
 	uint32_t *ah_seq;               /**< AH sequence number location */
 	uint32_t *esp_seq;              /**< ESP sequence number location */
 	uint16_t *tun_hdr_id;           /**< Tunnel header ID > */
@@ -799,7 +799,7 @@ pkt_disposition_e do_ipsec_in_classify(odp_packet_t pkt,
 	odph_ahhdr_t *ah = NULL;
 	odph_esphdr_t *esp = NULL;
 	ipsec_cache_entry_t *entry;
-	odp_crypto_op_params_t params;
+	odp_crypto_op_param_t params;
 	odp_bool_t posted = 0;
 
 	/* Default to skip IPsec */
@@ -919,9 +919,9 @@ pkt_disposition_e do_ipsec_in_finish(odp_packet_t pkt,
 		ip->proto = ah->next_header;
 	}
 
-	if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_96) {
+	if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_HMAC)
 		icv_len = ODP_AUTH_ALG_MD5_96_ICV_LEN; /* 12 ICV bytes  */
-	}
+
 
     /*
      * Finish cipher by finding ESP trailer and processing
@@ -1003,7 +1003,7 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 	uint16_t ip_data_len = ipv4_data_len(ip);
 	uint8_t *ip_data = ipv4_data_p(ip);
 	ipsec_cache_entry_t *entry;
-	odp_crypto_op_params_t params;
+	odp_crypto_op_param_t params;
 	int hdr_len = 0;
 	int trl_len = 0;
 	odph_ahhdr_t *ah = NULL;
@@ -1086,9 +1086,8 @@ pkt_disposition_e do_ipsec_out_classify(odp_packet_t pkt,
 					     entry->esp.block_len);
 		trl_len = encrypt_len - ip_data_len;
 
-		if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_96) {
+		if (ctx->ipsec.auth_alg == ODP_AUTH_ALG_MD5_HMAC)
 			icv_len = ODP_AUTH_ALG_MD5_96_ICV_LEN;
-		}
 
 		esp->spi = odp_cpu_to_be_32(entry->esp.spi);
 		memcpy(esp + 1, entry->state.iv, entry->esp.iv_len);

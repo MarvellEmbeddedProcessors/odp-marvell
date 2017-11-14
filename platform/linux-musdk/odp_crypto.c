@@ -246,14 +246,15 @@ static enum sam_auth_alg mvsam_get_auth_alg(odp_auth_alg_t auth_alg)
 	{
 	case ODP_AUTH_ALG_NULL:
 		return SAM_AUTH_NONE;
-	case ODP_AUTH_ALG_MD5_96:
+	case ODP_AUTH_ALG_MD5_HMAC:
 		return SAM_AUTH_HMAC_MD5;
-	case ODP_AUTH_ALG_SHA256_128:
+	case ODP_AUTH_ALG_SHA256_HMAC:
 		return SAM_AUTH_HMAC_SHA2_256;
-	case ODP_AUTH_ALG_AES128_GCM:
+	case ODP_AUTH_ALG_AES_GCM:
 		return SAM_AUTH_AES_GCM;
+	default:
+		return SAM_AUTH_NONE;
 	}
-	return SAM_AUTH_NONE;
 }
 
 static int mvsam_odp_crypto_capability(odp_crypto_capability_t *capa)
@@ -262,18 +263,18 @@ static int mvsam_odp_crypto_capability(odp_crypto_capability_t *capa)
 	capa->ciphers.bit.null = 1;
 	capa->ciphers.bit.des = 1;
 	capa->ciphers.bit.trides_cbc  = 1;
-	capa->ciphers.bit.aes128_cbc  = 1;
-	capa->ciphers.bit.aes128_gcm  = 1;
+	capa->ciphers.bit.aes_cbc  = 1;
+	capa->ciphers.bit.aes_gcm  = 1;
 	capa->auths.bit.null = 1;
-	capa->auths.bit.md5_96 = 1;
-	capa->auths.bit.sha256_128 = 1;
-	capa->auths.bit.aes128_gcm  = 1;
+	capa->auths.bit.md5_hmac = 1;
+	capa->auths.bit.sha256_hmac = 1;
+	capa->auths.bit.aes_gcm  = 1;
 	capa->max_sessions = 20;
 	return 0;
 }
 
 static int mvsam_odp_crypto_session_create(
-	odp_crypto_session_params_t *params,
+	odp_crypto_session_param_t *params,
 	odp_crypto_session_t *session_out,
 	odp_crypto_ses_create_err_t *status)
 {
@@ -295,7 +296,7 @@ static int mvsam_odp_crypto_session_create(
 	sam_session.cipher_iv      = params->iv.data;
 	sam_session.cipher_key     = params->cipher_key.data;
 	sam_session.cipher_key_len = params->cipher_key.length;
-	if (params->auth_alg == ODP_AUTH_ALG_MD5_96) {
+	if (params->auth_alg == ODP_AUTH_ALG_MD5_HMAC) {
 		sam_session.auth_alg     = mvsam_get_auth_alg(params->auth_alg);
 		sam_session.auth_key     = params->auth_key.data;
 		sam_session.auth_key_len = params->auth_key.length;
@@ -389,7 +390,7 @@ static inline int mvsam_result_enq(struct sam_cio_op_result *sam_res, int num_re
 	return 0;
 }
 
-static int mvsam_odp_crypto_operation(odp_crypto_op_params_t *params,
+static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 				      odp_bool_t *posted,
 				      odp_crypto_op_result_t *result)
 {
@@ -1166,7 +1167,7 @@ odp_crypto_session_create(odp_crypto_session_param_t *param,
 	int aes_gcm = 0;
 	
 #ifdef ODP_PKTIO_MVSAM
-	return mvsam_odp_crypto_session_create(params, session_out, status);
+	return mvsam_odp_crypto_session_create(param, session_out, status);
 #endif /* ODP_PKTIO_MVSAM */
 
 	/* Default to successful result */
@@ -1210,9 +1211,6 @@ odp_crypto_session_create(odp_crypto_session_param_t *param,
 		rc = process_cipher_param(session, EVP_des_ede3_cbc());
 		break;
 	case ODP_CIPHER_ALG_AES_CBC:
-#if ODP_DEPRECATED_API
-	case ODP_CIPHER_ALG_AES128_CBC:
-#endif
 		rc = process_cipher_param(session, EVP_aes_128_cbc());
 		break;
 #if ODP_DEPRECATED_API
@@ -1332,7 +1330,7 @@ odp_crypto_operation(odp_crypto_op_param_t *param,
 	odp_bool_t allocated = false;
 	
 #ifdef ODP_PKTIO_MVSAM
-	return mvsam_odp_crypto_operation(params, posted, result);
+	return mvsam_odp_crypto_operation(param, posted, result);
 #endif /* ODP_PKTIO_MVSAM */
 	session = (odp_crypto_generic_session_t *)(intptr_t)param->session;
 

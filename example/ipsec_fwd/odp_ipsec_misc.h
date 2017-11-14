@@ -99,14 +99,16 @@ int parse_key_string(char *keystring,
 
 	/* Algorithm is either cipher or authentication */
 	if (alg->cipher) {
-		if (((alg->u.cipher == ODP_CIPHER_ALG_3DES_CBC) && (key_bits_in == KEY_BITS_3DES)) ||
-		    ((alg->u.cipher == ODP_CIPHER_ALG_AES128_CBC) && (key_bits_in == KEY_BITS_AES)))
+		if (((alg->u.cipher == ODP_CIPHER_ALG_3DES_CBC) &&
+		     (key_bits_in == KEY_BITS_3DES)) ||
+		     ((alg->u.cipher == ODP_CIPHER_ALG_AES_CBC) &&
+		     (key_bits_in == KEY_BITS_AES)))
 			key->length = key_bits_in / 8;
 	} else {
-		if ((alg->u.auth == ODP_AUTH_ALG_MD5_96) &&
+		if ((alg->u.auth == ODP_AUTH_ALG_MD5_HMAC) &&
 		    (KEY_BITS_MD5_96 == key_bits_in))
 			key->length = key_bits_in / 8;
-		else if ((alg->u.auth == ODP_AUTH_ALG_SHA256_128) &&
+		else if ((alg->u.auth == ODP_AUTH_ALG_SHA256_HMAC) &&
 			 (KEY_BITS_SHA256_128 == key_bits_in))
 			key->length = key_bits_in / 8;
 	}

@@ -45,7 +45,7 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 			     odp_pool_t out_pool,
 			     int worker_id)
 {
-	odp_crypto_session_params_t params;
+	odp_crypto_session_param_t params;
 	ipsec_cache_entry_t *entry;
 	odp_crypto_ses_create_err_t ses_create_rc;
 	odp_crypto_session_t session;
