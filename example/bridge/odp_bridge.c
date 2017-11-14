@@ -85,6 +85,7 @@
  * @brief Maximum number of packet in a burst
  */
 #define MAX_PKT_BURST          256
+#define MAX_PKT_BURST_GIU      32
 
 /** Maximum number of pktio queues per interface */
 #define MAX_QUEUES             32
@@ -127,6 +128,7 @@ typedef struct {
 	enum checksum_offload_mode checksum_offload; /**< Checksum offload */
 	int echo;	        /**< Echo packet */
 	int num_buffers_per_queue;
+	int burst_size;
 } appl_args_t;
 
 static int exit_threads;	/**< Break workers loop if set to 1 */
@@ -285,7 +287,7 @@ static void sig_int_handler(int sig)
 static int run_worker(void *arg)
 {
 	int pkts;
-	odp_packet_t pkt_tbl[MAX_PKT_BURST];
+	odp_packet_t pkt_tbl[gbl_args->appl.burst_size];
 	int dst_idx, num_pktio;
 	odp_pktin_queue_t pktin;
 	odp_pktout_queue_t pktout;
@@ -315,7 +317,9 @@ static int run_worker(void *arg)
 				pktio = 0;
 		}
 
-		pkts = odp_pktin_recv(pktin, pkt_tbl, MAX_PKT_BURST);
+		pkts = odp_pktin_recv(pktin,
+				      pkt_tbl,
+				      gbl_args->appl.burst_size);
 		if (odp_unlikely(pkts <= 0))
 			continue;
 
@@ -1037,6 +1041,7 @@ int main(int argc, char *argv[])
 	(void)odp_cpumask_to_str(&cpumask, cpumaskstr, sizeof(cpumaskstr));
 
 	gbl_args->appl.num_workers = num_workers;
+	gbl_args->appl.burst_size = MAX_PKT_BURST;
 
 	for (i = 0; i < num_workers; i++)
 		gbl_args->thread[i].thr_idx    = i;
@@ -1060,6 +1065,7 @@ int main(int argc, char *argv[])
 		       SHM_PKT_POOL_BUF_SIZE_GIU);
 		params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE_GIU;
 		params.pkt.len     = SHM_PKT_POOL_BUF_SIZE_GIU;
+		gbl_args->appl.burst_size = MAX_PKT_BURST_GIU;
 	}
 	if (gbl_args->appl.num_buffers_per_queue == 0)
 		gbl_args->appl.num_buffers_per_queue = SHM_PKT_POOL_SIZE_PER_QUEUE;
