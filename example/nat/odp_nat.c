@@ -574,26 +574,30 @@ static void ip_table_add_entry(uint32_t subnet, uint32_t mask, uint32_t public_s
 
 static void *odp_nat_packet_l3_ptr(odp_packet_t pkt, uint32_t *offset, uint16_t *ethtype)
 {
-	odph_ethhdr_t *eth;
 	odph_vlanhdr_t *vlan;
 	uint8_t *parseptr;
 
 	if (odp_packet_has_eth(pkt)) {
-		*offset = sizeof(odph_ethhdr_t);
-		eth = (odph_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-		*ethtype = odp_be_to_cpu_16(eth->type);
-		parseptr = (uint8_t *)(eth + 1);
-
 		if (gbl_args->appl.dsa_mode) {
 			odph_dsa_ethhdr_t *eth;
 			*offset = sizeof(odph_dsa_ethhdr_t);
 			eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+			if (odp_unlikely(!eth)) {
+				printf("odp_nat_packet_l3_ptr dsa l2 error\n");
+				odp_packet_print(pkt);
+				return NULL;
+			}
 			*ethtype = odp_be_to_cpu_16(eth->type);
 			parseptr = (uint8_t *)(eth + 1);
 		} else {
 			odph_ethhdr_t *eth;
 		        *offset = sizeof(odph_ethhdr_t);
 		        eth = (odph_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+			if (odp_unlikely(!eth)) {
+				printf("odp_nat_packet_l3_ptr l2 error\n");
+				odp_packet_print(pkt);
+				return NULL;
+			}
 		        *ethtype = odp_be_to_cpu_16(eth->type);
 		        parseptr = (uint8_t *)(eth + 1);
 		}
@@ -637,6 +641,11 @@ static inline int swap_dsa_to_vlanhdr(odp_packet_t pkt)
 	odph_nat_vlanhdr_t	vlan_hdr;
 
 	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+	if (odp_unlikely(!eth)) {
+		printf("swap_dsa_to_vlanhdr l2 error\n");
+		odp_packet_print(pkt);
+		return 1;
+	}
 	vlan_hdr.eth_type = odp_cpu_to_be_16(ODPH_ETHTYPE_VLAN);
 	vlan_hdr.vlan = odp_cpu_to_be_16((odp_be_to_cpu_16(eth->dsa.vid) &
 			VID_MASK));
@@ -671,6 +680,11 @@ static inline int swap_vlanhdr_to_dsa(odp_packet_t pkt)
 	uint16_t		eth_type;
 
 	l2hdr = (odph_vlan_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+	if (odp_unlikely(!l2hdr)) {
+		printf("swap_vlanhdr_to_dsa l2 error\n");
+		odp_packet_print(pkt);
+		return 1;
+	}
 	eth_type = odp_be_to_cpu_16(l2hdr->type);
 	if (odp_likely(eth_type == ODPH_ETHTYPE_VLAN))
 		vid = odp_be_to_cpu_16(l2hdr->vlan);
@@ -729,7 +743,7 @@ static int process_tocpu_lan(odp_packet_t pkt, int strip_dsa)
 		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 		printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -763,7 +777,7 @@ static int process_tocpu_wan(odp_packet_t pkt)
 		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 		printf("Sending to %s\n", gbl_args->appl.if_names[tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -792,7 +806,7 @@ static int process_fromcpu_lan(odp_packet_t pkt)
 		printf("Sending to %s\n",
 		       gbl_args->appl.if_names[pktio.tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -821,7 +835,7 @@ static int process_fromcpu_wan(odp_packet_t pkt)
 		printf("Sending to %s\n",
 		       gbl_args->appl.if_names[pktio.tx_idx]);
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -1006,6 +1020,11 @@ static inline void snat_dsa_processing(odp_packet_t pkt)
 	unsigned char src_dev_id, dst_dev_id;
 
 	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+	if (odp_unlikely(!eth)) {
+		printf("snat_dsa_processing l2 error\n");
+		odp_packet_print(pkt);
+		return;
+	}
 	/* swap Source and Dest DevID of DSA tag */
 	src_dev_id = eth->dsa.src_dev & DEV_ID_MASK;
 	dst_dev_id = eth->dsa.dst_dev & DEV_ID_MASK;
@@ -1030,7 +1049,7 @@ static inline int send_fromcpu_after_snat(odp_packet_t pkt)
 		data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 		printf("Packet from CPU after SNAT\n");
 
-		for (j = 0; j < 64; j++)
+		for (j = 0; (j < 64) && data; j++)
 			printf("%02x ", data[j]);
 		printf("\n");
 	}
@@ -1393,7 +1412,6 @@ static inline int send_to_snat(odp_packet_t pkt, uint8_t pkt_from_tap)
 
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
 							  &ethtype);
-
 	if (odp_unlikely(!ipv4hdr))
 		return 0;
 
@@ -1550,7 +1568,12 @@ static inline odph_nat_pkt_type_e get_pkt_type(odp_packet_t pkt, odp_nat_pktio_t
     } else {
         // From physical interfaces
         if (pktio->rx_idx < gbl_args->appl.if_phy_count) {
-            eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+		eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
+		if (odp_unlikely(!eth)) {
+			printf("get_pkt_type l2 error\n");
+			odp_packet_print(pkt);
+			return PKT_TYPE_UNKNOWN;
+		}
 
             // Learn the device ID
             gbl_args->appl.src_dev_id = ntohs(eth->dsa.src_dev) & DEV_ID_MASK;
@@ -1590,6 +1613,7 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 	unsigned i;
 	int proceed = 0;//0: to send, 1: to drop, 2: been sent
 	int sent = 0;
+	int to_send = 0;
 	int control_sent = 0;
 	int res;
 
@@ -1603,9 +1627,8 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 			uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
 			printf("Rx from interface %s\n", gbl_args->appl.if_names[pktio->rx_idx]);
 
-			for (j = 0; j < 64; j++) {
+			for (j = 0; (j < 64) && data; j++)
 				printf("%02x ", data[j]);
-			}
 			printf("\n");
 		}
 
@@ -1668,7 +1691,8 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
                 break;
             default:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
-                    printf("It is UNKNOWN TYPE\n");
+			printf("It is UNKNOWN TYPE\n");
+			odp_packet_print(pkt);
                 }
                 odp_packet_free(pkt);
                 break;
@@ -1676,15 +1700,14 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 
         switch (proceed) {
             case 0:
-                send_pkt_tbl[sent++] = pkt;
+		send_pkt_tbl[to_send++] = pkt;
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
                     int j;
                     uint8_t* data = (uint8_t *)odp_packet_l2_ptr(pkt, NULL);
                     printf("After processing:\n");
 
-                    for (j = 0; j < 64; j++) {
-                        printf("%02x ", data[j]);
-                    }
+			for (j = 0; (j < 64) && data; j++)
+				printf("%02x ", data[j]);
                     printf("\n");
                     printf("Sending to  %s\n", gbl_args->appl.if_names[pktio->tx_idx]);
                 }
@@ -1703,8 +1726,13 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
         }
 	}
 
-	if (odp_likely(sent))
-		sent = odp_pktout_send(pktio->pktout, send_pkt_tbl, sent);
+	if (odp_likely(to_send)) {
+		sent = odp_pktout_send(pktio->pktout, send_pkt_tbl, to_send);
+		if (odp_unlikely(to_send > sent))
+			/* Drop rejected packets */
+			odp_packet_free_multi(&send_pkt_tbl[sent],
+					      to_send - sent);
+	}
 
 	return (sent + control_sent);
 }
@@ -1767,6 +1795,7 @@ static int run_worker(void *arg)
 
 	odp_barrier_wait(&barrier);
 
+	sleep(1);
 	/* Loop packets */
 	while (!exit_threads) {
 		int sent;
@@ -1799,17 +1828,8 @@ static int run_worker(void *arg)
 		sent = odp_unlikely(sent < 0) ? 0 : sent;
 		tx_drops = pkts - sent;
 
-		if (odp_unlikely(tx_drops)) {
-			int i;
-
+		if (odp_unlikely(tx_drops))
 			stats->s.tx_drops += tx_drops;
-
-#if 0
-			/* Drop rejected packets */
-			for (i = sent; i < pkts; i++)
-				odp_packet_free(pkt_tbl[i]);
-#endif
-		}
 
 		stats->s.packets += pkts;
 	}
