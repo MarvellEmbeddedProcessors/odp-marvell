@@ -300,6 +300,7 @@ skip_buf:
 		shadow_q->read_ind = (shadow_q->read_ind + num_bufs) & SHADOW_Q_MAX_SIZE_MASK;
 		shadow_q->size -= num_bufs;
 		num_bufs = 0;
+		skip_bufs = 0;
 	}
 	if (num_bufs) {
 		pp2_bpool_put_buffs(hif,
