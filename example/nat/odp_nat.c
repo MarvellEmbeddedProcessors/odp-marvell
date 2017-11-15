@@ -582,16 +582,22 @@ static void *odp_nat_packet_l3_ptr(odp_packet_t pkt, uint32_t *offset, uint16_t 
 			odph_dsa_ethhdr_t *eth;
 			*offset = sizeof(odph_dsa_ethhdr_t);
 			eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-			if (odp_unlikely(!eth))
+			if (odp_unlikely(!eth)) {
+				printf("odp_nat_packet_l3_ptr dsa l2 error\n");
+				odp_packet_print(pkt);
 				return NULL;
+			}
 			*ethtype = odp_be_to_cpu_16(eth->type);
 			parseptr = (uint8_t *)(eth + 1);
 		} else {
 			odph_ethhdr_t *eth;
 		        *offset = sizeof(odph_ethhdr_t);
 		        eth = (odph_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-			if (odp_unlikely(!eth))
+			if (odp_unlikely(!eth)) {
+				printf("odp_nat_packet_l3_ptr l2 error\n");
+				odp_packet_print(pkt);
 				return NULL;
+			}
 		        *ethtype = odp_be_to_cpu_16(eth->type);
 		        parseptr = (uint8_t *)(eth + 1);
 		}
@@ -635,8 +641,11 @@ static inline int swap_dsa_to_vlanhdr(odp_packet_t pkt)
 	odph_nat_vlanhdr_t	vlan_hdr;
 
 	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-	if (odp_unlikely(!eth))
+	if (odp_unlikely(!eth)) {
+		printf("swap_dsa_to_vlanhdr l2 error\n");
+		odp_packet_print(pkt);
 		return 1;
+	}
 	vlan_hdr.eth_type = odp_cpu_to_be_16(ODPH_ETHTYPE_VLAN);
 	vlan_hdr.vlan = odp_cpu_to_be_16((odp_be_to_cpu_16(eth->dsa.vid) &
 			VID_MASK));
@@ -671,8 +680,11 @@ static inline int swap_vlanhdr_to_dsa(odp_packet_t pkt)
 	uint16_t		eth_type;
 
 	l2hdr = (odph_vlan_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-	if (odp_unlikely(!l2hdr))
+	if (odp_unlikely(!l2hdr)) {
+		printf("swap_vlanhdr_to_dsa l2 error\n");
+		odp_packet_print(pkt);
 		return 1;
+	}
 	eth_type = odp_be_to_cpu_16(l2hdr->type);
 	if (odp_likely(eth_type == ODPH_ETHTYPE_VLAN))
 		vid = odp_be_to_cpu_16(l2hdr->vlan);
@@ -1008,8 +1020,11 @@ static inline void snat_dsa_processing(odp_packet_t pkt)
 	unsigned char src_dev_id, dst_dev_id;
 
 	eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-	if (odp_unlikely(!eth))
+	if (odp_unlikely(!eth)) {
+		printf("snat_dsa_processing l2 error\n");
+		odp_packet_print(pkt);
 		return;
+	}
 	/* swap Source and Dest DevID of DSA tag */
 	src_dev_id = eth->dsa.src_dev & DEV_ID_MASK;
 	dst_dev_id = eth->dsa.dst_dev & DEV_ID_MASK;
@@ -1397,7 +1412,6 @@ static inline int send_to_snat(odp_packet_t pkt, uint8_t pkt_from_tap)
 
 	ipv4hdr = (odph_ipv4hdr_t *)odp_nat_packet_l3_ptr(pkt, &l3_offset,
 							  &ethtype);
-
 	if (odp_unlikely(!ipv4hdr))
 		return 0;
 
@@ -1555,8 +1569,11 @@ static inline odph_nat_pkt_type_e get_pkt_type(odp_packet_t pkt, odp_nat_pktio_t
         // From physical interfaces
         if (pktio->rx_idx < gbl_args->appl.if_phy_count) {
 		eth = (odph_dsa_ethhdr_t *)odp_packet_l2_ptr(pkt, NULL);
-		if (odp_unlikely(!eth))
+		if (odp_unlikely(!eth)) {
+			printf("get_pkt_type l2 error\n");
+			odp_packet_print(pkt);
 			return PKT_TYPE_UNKNOWN;
+		}
 
             // Learn the device ID
             gbl_args->appl.src_dev_id = ntohs(eth->dsa.src_dev) & DEV_ID_MASK;
@@ -1674,7 +1691,8 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
                 break;
             default:
                 if (odp_unlikely(gbl_args->appl.debug_mode)) {
-                    printf("It is UNKNOWN TYPE\n");
+			printf("It is UNKNOWN TYPE\n");
+			odp_packet_print(pkt);
                 }
                 odp_packet_free(pkt);
                 break;
