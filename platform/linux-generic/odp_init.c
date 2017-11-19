@@ -79,7 +79,7 @@ static int cleanup_files(const char *dirpath, int odp_pid)
 }
 
 #ifdef ODP_MVNMP
-static int nmp_init_all(struct nmp *nmp)
+static int nmp_init_all(void)
 {
 	int ret;
 	struct nmp_params params;
@@ -198,7 +198,7 @@ int odp_init_global(odp_instance_t *instance,
 	stage = SCHED_INIT;
 
 #ifdef ODP_MVNMP
-	if (nmp_init_all(nmp)) {
+	if (nmp_init_all()) {
 		ODP_ERR("ODP nmp init failed.\n");
 		goto init_failed;
 	}
