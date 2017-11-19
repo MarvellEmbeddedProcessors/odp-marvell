@@ -1,4 +1,4 @@
-From 08a08fd26d38eed3084c403d8f3e494cd38f3dc5 Mon Sep 17 00:00:00 2001
+From 5389983a013d3104f4f6ccdc9730d14cfcad57cb Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Wed, 11 Oct 2017 01:37:38 +0300
 Subject: [PATCH 2/2] tests: classification modifications

@@ -1185,7 +1185,7 @@ static inline void parse_l2(odp_packet_hdr_t *pkt_hdr,
 	pkt_hdr->p.input_flags.l2 = 1;
 
 	pp2_ppio_inq_desc_get_vlan_tag(desc, &tag);
-	pkt_hdr->p.input_flags.vlan = (tag == PP2_INQ_VLAN_TAG_SINGLE);
+	pkt_hdr->p.input_flags.vlan = (tag != PP2_INQ_VLAN_TAG_NONE);
 	pkt_hdr->p.input_flags.vlan_qinq = (tag == PP2_INQ_VLAN_TAG_DOUBLE);
 	pp2_ppio_inq_desc_get_l2_cast_info(desc, &cast);
 	pkt_hdr->p.input_flags.eth_mcast = (cast == PP2_INQ_L2_MULTICAST);
