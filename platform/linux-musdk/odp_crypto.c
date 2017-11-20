@@ -194,7 +194,6 @@ struct crypto_session            sessions[MVSAM_MAX_NUM_SESSIONS];
 
 #endif /* ODP_PKTIO_MVSAM */
 
-
 static
 odp_crypto_generic_op_result_t *get_op_result_from_event(odp_event_t ev)
 {
@@ -240,17 +239,23 @@ static int find_free_cio(int cio_local_idx)
 	return i;
 }
 
-static enum sam_auth_alg mvsam_get_auth_alg(odp_auth_alg_t auth_alg)
+static enum sam_auth_alg mvsam_get_auth_alg(
+							odp_auth_alg_t auth_alg,
+							int *icv_len)
 {
+	*icv_len = 0;
 	switch(auth_alg)
 	{
 	case ODP_AUTH_ALG_NULL:
 		return SAM_AUTH_NONE;
 	case ODP_AUTH_ALG_MD5_HMAC:
+		*icv_len = 12;
 		return SAM_AUTH_HMAC_MD5;
 	case ODP_AUTH_ALG_SHA256_HMAC:
+		*icv_len = 16;
 		return SAM_AUTH_HMAC_SHA2_256;
 	case ODP_AUTH_ALG_AES_GCM:
+		*icv_len = 16;
 		return SAM_AUTH_AES_GCM;
 	default:
 		return SAM_AUTH_NONE;
@@ -273,6 +278,44 @@ static int mvsam_odp_crypto_capability(odp_crypto_capability_t *capa)
 	return 0;
 }
 
+static int mvsam_set_session_params(
+				struct sam_session_params *sam_session,
+				odp_crypto_session_param_t *params)
+{
+	int icv_len;
+
+	sam_session->auth_alg = mvsam_get_auth_alg(params->auth_alg, &icv_len);
+	sam_session->proto          = SAM_PROTO_NONE;
+	sam_session->dir            = params->op;
+	sam_session->cipher_mode    = SAM_CIPHER_CBC;
+
+	switch (params->cipher_alg) {
+	case ODP_CIPHER_ALG_DES:
+		sam_session->cipher_alg = SAM_CIPHER_DES;
+		break;
+	case ODP_CIPHER_ALG_3DES_CBC:
+		sam_session->cipher_alg = SAM_CIPHER_3DES;
+		break;
+	case ODP_CIPHER_ALG_AES_CBC:
+		sam_session->cipher_alg = SAM_CIPHER_AES;
+		break;
+	case ODP_CIPHER_ALG_AES_GCM:
+		sam_session->cipher_alg  = SAM_CIPHER_AES;
+		sam_session->cipher_mode = SAM_CIPHER_GCM;
+		break;
+	default:
+		return -1;
+	}
+
+	sam_session->cipher_iv      = params->iv.data;
+	sam_session->cipher_key     = params->cipher_key.data;
+	sam_session->cipher_key_len = params->cipher_key.length;
+	sam_session->auth_key       = params->auth_key.data;
+	sam_session->auth_key_len   = params->auth_key.length;
+	sam_session->u.basic.auth_aad_len = icv_len;
+	return 0;
+}
+
 static int mvsam_odp_crypto_session_create(
 	odp_crypto_session_param_t *params,
 	odp_crypto_session_t *session_out,
@@ -289,19 +332,11 @@ static int mvsam_odp_crypto_session_create(
 		return -1;
 	}
 	memset(&sam_session, 0, sizeof(sam_session));
-	sam_session.proto          = SAM_PROTO_NONE; /* only algorithm offload */
-	sam_session.dir            = params->op;
-	sam_session.cipher_alg     = params->cipher_alg;
-	sam_session.cipher_mode    = SAM_CIPHER_CBC;
-	sam_session.cipher_iv      = params->iv.data;
-	sam_session.cipher_key     = params->cipher_key.data;
-	sam_session.cipher_key_len = params->cipher_key.length;
-	if (params->auth_alg == ODP_AUTH_ALG_MD5_HMAC) {
-		sam_session.auth_alg     = mvsam_get_auth_alg(params->auth_alg);
-		sam_session.auth_key     = params->auth_key.data;
-		sam_session.auth_key_len = params->auth_key.length;
-		sam_session.u.basic.auth_icv_len = 12;
-		sam_session.u.basic.auth_aad_len = 0;
+	rc = mvsam_set_session_params(&sam_session, params);
+	if (odp_unlikely(rc != 0)) {
+		ODP_ERR("invalid session params. failed to create a new session!\n");
+		*status = -1;
+		return -1;
 	}
 
 	rc = sam_session_create(&sam_session, &sa);
@@ -579,6 +614,10 @@ static int mvsam_odp_crypto_init_global(void)
 static int mvsam_odp_crypto_term_global(void)
 {
 	unsigned int i, cio_local_idx;
+
+	for (i = 0 ; i < num_session ; i++)
+		sam_session_destroy(sessions[i].sa);
+
 	for(i = 0 ; i < MAX_NUM_OF_THREADS ; i++) {
 		for(cio_local_idx = 0 ; cio_local_idx < sam_num_inst ; cio_local_idx++)
 			sam_cio_deinit(crp_thread[i].cio[cio_local_idx].cio_hw);
