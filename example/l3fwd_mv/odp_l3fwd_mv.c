@@ -467,91 +467,6 @@ static int find_port_id_by_name(char *name, app_args_t *args)
 	return -1;
 }
 
-/* split string into tokens */
-static int split_string(char *str, int stringlen,
-			char **tokens, int maxtokens, char delim)
-{
-	int i, tok = 0;
-	int tokstart = 1; /* first token is right at start of string */
-
-	if (str == NULL || tokens == NULL)
-		goto einval_error;
-
-	for (i = 0; i < stringlen; i++) {
-		if (str[i] == '\0' || tok >= maxtokens)
-			break;
-		if (tokstart) {
-			tokstart = 0;
-			tokens[tok++] = &str[i];
-		}
-		if (str[i] == delim) {
-			str[i] = '\0';
-			tokstart = 1;
-		}
-	}
-	return tok;
-
-einval_error:
-	errno = EINVAL;
-	return -1;
-}
-
-static int parse_config(char *cfg_str, app_args_t *args)
-{
-	char s[256];
-	const char *p, *p0 = cfg_str;
-	char *end;
-	enum fieldnames {
-		FLD_PORT = 0,
-		FLD_QUEUE,
-		FLD_LCORE,
-		FLD_LAST
-	};
-	unsigned long int_fld[FLD_LAST];
-	char *str_fld[FLD_LAST];
-	int i;
-	unsigned size;
-	int nb_qconfs = 0;
-	struct l3fwd_qconf_s *qconf_array = &args->qconf_config[0];
-
-	p = strchr(p0, '(');
-	while (p != NULL) {
-		++p;
-		p0 = strchr(p, ')');
-		if (p0 == NULL)
-			return -1;
-
-		size = p0 - p;
-		if (size >= sizeof(s))
-			return -1;
-
-		snprintf(s, sizeof(s), "%.*s", size, p);
-		i = split_string(s, sizeof(s), str_fld, FLD_LAST, ',');
-		if (i != FLD_LAST)
-			return -1;
-		for (i = 0; i < FLD_LAST; i++) {
-			errno = 0;
-			int_fld[i] = strtoul(str_fld[i], &end, 0);
-			if (errno != 0 || end == str_fld[i] || int_fld[i] > 255)
-				return -1;
-		}
-		if (nb_qconfs >= MAX_NB_QCONFS) {
-			printf("exceeded max number of queue params: %d\n",
-			       nb_qconfs);
-			return -1;
-		}
-		qconf_array[nb_qconfs].if_idx = (uint8_t)int_fld[FLD_PORT];
-		qconf_array[nb_qconfs].rxq_idx = (uint8_t)int_fld[FLD_QUEUE];
-		qconf_array[nb_qconfs].core_idx = (uint8_t)int_fld[FLD_LCORE];
-		++nb_qconfs;
-
-		p = strchr(p0, '(');
-	}
-	args->qconf_count = nb_qconfs;
-
-	return 0;
-}
-
 static void print_usage(char *progname)
 {
 #ifdef _DST_IP_FRWD_
@@ -575,9 +490,6 @@ static void print_usage(char *progname)
 	       "	optional, default as 0, run forever\n"
 	       "  -t, --thread Number of threads to do forwarding\n"
 	       "	optional, default as availbe worker cpu count\n"
-	       "  -q, --queue  Configure rx queue(s) for port\n"
-	       "	optional, format: [(port, queue, thread),...]\n"
-	       "	for example: -q '(0, 0, 1),(1,0,2)'\n"
 	       "  -e, --error_check 0: Don't check packet errors (default)\n"
 	       "                    1: Check packet errors\n"
 	       "  -h, --help   Display help and exit.\n\n"
@@ -602,9 +514,6 @@ static void print_usage(char *progname)
 	       "	optional, default as 0, run forever\n"
 	       "  -t, --thread Number of threads to do forwarding\n"
 	       "	optional, default as availbe worker cpu count\n"
-	       "  -q, --queue  Configure rx queue(s) for port\n"
-	       "	optional, format: [(port, queue, thread),...]\n"
-	       "	for example: -q '(0, 0, 1),(1,0,2)'\n"
 	       "  -e, --error_check 0: Don't check packet errors (default)\n"
 	       "                    1: Check packet errors\n"
 	       "  -h, --help   Display help and exit.\n\n"
@@ -620,6 +529,7 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 	char *token, *local;
 	size_t len, route_index = 0;
 	int i, mem_failure = 0;
+	char temp_str[32];
 
 	static struct option longopts[] = {
 		{"interface", required_argument, NULL, 'i'},	/* return 'i' */
@@ -633,12 +543,14 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		{NULL, 0, NULL, 0}
 	};
 
+	args->error_check = 0;
+
 	while (1) {
 #ifdef _DST_IP_FRWD_
-		opt = getopt_long(argc, argv, "+s:t:d:i:r:q:e:h",
+		opt = getopt_long(argc, argv, "+s:t:d:i:r:e:h",
 				  longopts, &long_index);
 #else
-		opt = getopt_long(argc, argv, "+t:d:i:r:q:e:h",
+		opt = getopt_long(argc, argv, "+t:d:i:r:e:h",
 				  longopts, &long_index);
 #endif
 		if (opt == -1)
@@ -656,6 +568,12 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		case 't':
 			i = odp_cpu_count();
 			args->worker_count = atoi(optarg);
+			sprintf(temp_str, "%d", args->worker_count);
+			if (strcmp(optarg, temp_str) != 0) {
+				printf("Invalid number of threads\n");
+				print_usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
 			if (args->worker_count > i) {
 				printf("Too many threads,"
 				       "truncate to cpu count: %d\n", i);
@@ -667,6 +585,12 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		/* parse seconds to run */
 		case 'd':
 			args->duration = atoi(optarg);
+			sprintf(temp_str, "%d", args->duration);
+			if (strcmp(optarg, temp_str) != 0) {
+				printf("Invalid duration\n");
+				print_usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
 			break;
 
 		/* parse packet-io interface names */
@@ -732,10 +656,6 @@ static void parse_cmdline_args(int argc, char *argv[], app_args_t *args)
 		case 'h':
 			print_usage(argv[0]);
 			exit(EXIT_SUCCESS);
-			break;
-
-		case 'q':
-			parse_config(optarg, args);
 			break;
 
 		default:
