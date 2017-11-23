@@ -516,8 +516,8 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 			cio->requests_cnt -= num_reqs;
 			cio->io_enqs_cnt  += num_reqs;
 			cio->io_enqs_offs += num_reqs;
-			if (cio->io_enqs_offs == REQ_THRSHLD_HI)
-				cio->io_enqs_offs = 0;
+			if (cio->io_enqs_offs >= REQ_THRSHLD_HI)
+				cio->io_enqs_offs -= REQ_THRSHLD_HI;
 		}
 	}
 

@@ -116,14 +116,14 @@ static void sig_usr(int sig);
 /**
  * Buffer pool for packet IO
  */
-#define SHM_PKT_POOL_BUF_COUNT 1024
+#define SHM_PKT_POOL_BUF_COUNT 2048
 #define SHM_PKT_POOL_BUF_SIZE  2048
 #define SHM_PKT_POOL_SIZE      (SHM_PKT_POOL_BUF_COUNT * SHM_PKT_POOL_BUF_SIZE)
 
 /**
  * Buffer pool for crypto session output packets
  */
-#define SHM_OUT_POOL_BUF_COUNT 1024
+#define SHM_OUT_POOL_BUF_COUNT 2048
 #define SHM_OUT_POOL_BUF_SIZE  2048
 #define SHM_OUT_POOL_SIZE      (SHM_OUT_POOL_BUF_COUNT * SHM_OUT_POOL_BUF_SIZE)
 
@@ -135,7 +135,7 @@ static void sig_usr(int sig);
 
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	32
-#define MAX_CTX_DB      MAX_PKT_BURST*8*8    /* 256*8 */
+#define MAX_CTX_DB      SHM_CTX_POOL_BUF_COUNT
 
 #define MAX_NB_PKTIO	2
 #define MAX_NB_QUEUE	2
@@ -1684,7 +1684,7 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 		}
 	}
 
-	for (i = 0; i < MAX_CTX_DB / 2; i++) {
+	for (i = 0; i < MAX_CTX_DB; i++) {
 		odp_buffer_t ctx_buf;
 
 		ctx_buf = ctx_buf_mng_db[worker_id][i];
@@ -1977,16 +1977,31 @@ main(int argc, char *argv[])
 	odp_instance_t instance;
 	odph_odpthread_params_t thr_params;
 
-	/* create by default scheduled queues */    ///// ONLY IPSEC START
+	odp_init_t odp_init_params;
+	odp_cpumask_t worker_cpu_mask;
+	odp_cpumask_t control_cpu_mask;
+
+	memset(&odp_init_params, 0, sizeof(odp_init_params));
+	odp_cpumask_zero(&control_cpu_mask);
+	odp_cpumask_zero(&worker_cpu_mask);
+	odp_cpumask_set(&control_cpu_mask, 0);
+
+	for (i = 0; i < MAX_WORKERS; i++)
+		odp_cpumask_set(&worker_cpu_mask, i);
+
+	odp_init_params.worker_cpus = &worker_cpu_mask;
+	odp_init_params.control_cpus = &control_cpu_mask;
+
+	/* create by default scheduled queues */
 	queue_create = odp_queue_create;
 	schedule = odp_schedule_cb;
 #ifdef IPSEC_DEBUG_SIG
-	if(signal(SIGUSR1, sig_usr) != 0)
-		printf("WARNING: register to SIGINT failed. Application "
-		       "may not close correctly and may fail on restart\n");
-	if(signal(SIGUSR2, sig_usr) != 0)
-		printf("WARNING: register to SIGINT failed. Application "
-		       "may not close correctly and may fail on restart\n");
+	if (signal(SIGUSR1, sig_usr) != 0)
+		printf("error while register to SIGUSR1. %s\n",
+		       strerror(errno));
+	if (signal(SIGUSR2, sig_usr) != 0)
+		printf("error while register to SIGUSR2. %s\n",
+		       strerror(errno));
 #endif
 
 	if (signal(SIGINT, sig_int) != 0) {
@@ -2006,7 +2021,7 @@ main(int argc, char *argv[])
 	}
 
 	/* Init ODP before calling anything else */
-	if (odp_init_global(&instance, NULL, NULL)) {
+	if (odp_init_global(&instance, &odp_init_params, NULL)) {
 		EXAMPLE_ERR("Error: ODP global init failed.\n");
 		exit(EXIT_FAILURE);
 	}
@@ -2066,7 +2081,7 @@ main(int argc, char *argv[])
 	/* Multiply the pool size by factor of 2 since it is shared between
 	 *all the pktio's in the system (ODP_CONFIG_PKTIO_ENTRIES)
 	 */
-	params.pkt.num     = SHM_PKT_POOL_BUF_COUNT * 2;
+	params.pkt.num     = SHM_PKT_POOL_BUF_COUNT * ipsec_workers_number;
 	params.type        = ODP_POOL_PACKET;
 
 	pkt_pool = odp_pool_create("packet_pool", &params);
@@ -2078,7 +2093,7 @@ main(int argc, char *argv[])
 	/* Create context buffer pool */
 	params.buf.size  = SHM_CTX_POOL_BUF_SIZE;
 	params.buf.align = 0;
-	params.buf.num   = SHM_CTX_POOL_BUF_COUNT;
+	params.buf.num   = SHM_CTX_POOL_BUF_COUNT * ipsec_workers_number;
 	params.type      = ODP_POOL_BUFFER;
 
 	ctx_pool = odp_pool_create("ctx_pool", &params);
