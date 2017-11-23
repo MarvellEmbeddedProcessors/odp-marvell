@@ -83,6 +83,7 @@
 #define MAX_STRING		32
 
 #define DEFAULT_AGING_TIME	300
+#define MIN_AGING_TIME		3
 #define MAX_AGING_TIME		3600
 
 #define MV_DSA_MODE_BIT		(0x1ULL << 62)
@@ -2435,7 +2436,7 @@ static void usage(char *progname)
 		"  -w, --wan_vid	VIDs(comma-separated, no spaces) DSA "
 		"tag mode, WAN VIDs\n"
 	       "  -o, --aging		aging time for NAT entries in seconds "
-	       "(0 - 3600)\n"
+	       "(3 - 3600)\n"
 	       "				Default value is 300 seconds\n"
 	       "				0 - aging disabled\n"
 	       "  -c, --count <number>	CPU count.\n"
@@ -2619,15 +2620,18 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 				exit(EXIT_FAILURE);
 			}
 
-			if (appl_args->aging_time > MAX_AGING_TIME) {
-				printf("Invalid aging time\n");
-				exit(EXIT_FAILURE);
-			}
 			if (appl_args->aging_time == 0)
 				printf("Aging disabled\n");
-			else
+			else {
+				if ((appl_args->aging_time > MAX_AGING_TIME) ||
+				    (appl_args->aging_time < MIN_AGING_TIME)) {
+					printf("Invalid aging time\n");
+					exit(EXIT_FAILURE);
+				}
+
 				printf("Aging time = %d\n",
 				       appl_args->aging_time);
+			}
 			break;
 
 		case 's':
