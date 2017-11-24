@@ -1,4 +1,4 @@
-From b5e980326736b0f8245f02c6f1ad62f3dba574b7 Mon Sep 17 00:00:00 2001
+From b18aaaf61b69952b580f971321bc6d2b297dea50 Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Mon, 18 Sep 2017 12:40:40 +0300
 Subject: [PATCH 1/2] tests: pktio modifications

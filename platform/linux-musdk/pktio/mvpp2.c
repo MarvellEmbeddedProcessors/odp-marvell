@@ -36,7 +36,6 @@
 
 /*#define USE_HW_BUFF_RECYLCE*/
 #define MAX_NUM_PACKPROCS		1
-#define BUFFER_RELEASE_BURST_SIZE	64
 #define PP2_SYSFS_RSS_PATH		"/sys/devices/platform/pp2/rss"
 #define PP2_SYSFS_RSS_NUM_TABLES_FILE	"num_rss_tables"
 #define PP2_MAX_BUF_STR_LEN		256
@@ -385,11 +384,11 @@ static int mvpp2_rss_type_get(int hash_enable, odp_pktin_hash_proto_t hash_proto
 static int mvpp2_free_buf(odp_buffer_t buf)
 {
 	odp_packet_t pkt = _odp_packet_from_buffer(buf);
-	struct pp2_buff_inf buff_inf;
 	odp_packet_hdr_t *pkt_hdr;
 	struct pp2_hif	*hif = get_hif(get_thr_id());
 	pktio_entry_t *pktio_entry;
-	int err;
+	struct mvpp2_bufs_stockpile *bufs_stockpile;
+	int err = 0;
 
 	if (unlikely(!hif)) {
 		ODP_ERR("mvpp2_free_buf: invalid hif object for thread-%d!\n", get_thr_id());
@@ -423,12 +422,19 @@ static int mvpp2_free_buf(odp_buffer_t buf)
 	}
 	pkt_hdr->input = NULL;
 
-	buff_inf.cookie = (u64)pkt;
-	buff_inf.addr   = mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
-	err = pp2_bpool_put_buff(hif,
-				 pktio_entry->s.pkt_mvpp2.bpool,
-				 &buff_inf);
-
+	bufs_stockpile =
+		&pktio_entry->s.pkt_mvpp2.bufs_stockpile_array[get_thr_id()];
+	bufs_stockpile->ent[bufs_stockpile->size].bpool =
+		pktio_entry->s.pkt_mvpp2.bpool;
+	bufs_stockpile->ent[bufs_stockpile->size].buff.cookie = (u64)pkt;
+	bufs_stockpile->ent[bufs_stockpile->size++].buff.addr =
+		mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
+	if (bufs_stockpile->size == BUFFER_RELEASE_BURST_SIZE) {
+		err = pp2_bpool_put_buffs(hif,
+					  bufs_stockpile->ent,
+					  &bufs_stockpile->size);
+		bufs_stockpile->size = 0;
+	}
 	return err;
 }
 
@@ -774,22 +780,29 @@ static int mvpp2_close(pktio_entry_t *pktio_entry)
 	int i, tc = 0;
 	struct pp2_hif *hif = thds[get_thr_id()].hif;
 	struct mvpp2_tx_shadow_q *shadow_q;
+	struct mvpp2_bufs_stockpile *bufs_stockpile;
+	pkt_mvpp2_t *mvpp2 = &pktio_entry->s.pkt_mvpp2;
 
 	mvpp2_deinit_cls(pktio_entry);
 
-	if (pktio_entry->s.pkt_mvpp2.ppio) {
+	if (mvpp2->ppio) {
 		for (i = 0; i < MVPP2_TOTAL_NUM_HIFS; i++) {
-			shadow_q = &pktio_entry->s.pkt_mvpp2.shadow_qs[i][tc];
+			shadow_q = &mvpp2->shadow_qs[i][tc];
 			shadow_q->num_to_release = shadow_q->size;
 			mvpp2_free_sent_buffers(hif, shadow_q);
+			bufs_stockpile = &mvpp2->bufs_stockpile_array[i];
+			if (bufs_stockpile->size)
+				pp2_bpool_put_buffs(hif,
+						    bufs_stockpile->ent,
+						    &bufs_stockpile->size);
 		}
 
 		/* Deinit the PP2 port */
-		pp2_ppio_deinit(pktio_entry->s.pkt_mvpp2.ppio);
+		pp2_ppio_deinit(mvpp2->ppio);
 	}
-	flush_bpool(pktio_entry->s.pkt_mvpp2.bpool, hif);
-	pp2_bpool_deinit(pktio_entry->s.pkt_mvpp2.bpool);
-	release_bpool(pktio_entry->s.pkt_mvpp2.bpool_id);
+	flush_bpool(mvpp2->bpool, hif);
+	pp2_bpool_deinit(mvpp2->bpool);
+	release_bpool(mvpp2->bpool_id);
 
 	ODP_DBG("port '%s' was closed\n", pktio_entry->s.name);
 	return 0;

@@ -16,7 +16,6 @@
 /* prefetch=2, tested to be optimal both for
    mvgiu_recv() & mvgiu_send() prefetch operations */
 #define MVGIU_PREFETCH_SHIFT		2
-#define BUFFER_RELEASE_BURST_SIZE	64
 #define MAX_BUFFER_GET_RETRIES		10000
 
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
@@ -33,10 +32,10 @@ extern void nmp_schedule_all(struct nmp *nmp);
 static int mvgiu_free_buf(odp_buffer_t buf)
 {
 	odp_packet_t pkt = _odp_packet_from_buffer(buf);
-	struct giu_buff_inf buff_inf;
 	odp_packet_hdr_t *pkt_hdr;
 	pktio_entry_t *pktio_entry;
-	int err;
+	struct mvgiu_bufs_stockpile *bufs_stockpile;
+	int err = 0;
 
 	pkt_hdr = odp_packet_hdr(pkt);
 
@@ -70,61 +69,97 @@ static int mvgiu_free_buf(odp_buffer_t buf)
 	}
 
 	pkt_hdr->input = NULL;
-	buff_inf.cookie = (u64)pkt;
+
+	bufs_stockpile =
+		&pktio_entry->s.pkt_mvgiu.bufs_stockpile;
+	bufs_stockpile->ent[bufs_stockpile->size].cookie = (u64)pkt;
 #ifdef MVGIU_NO_HEADROOM
 	odp_packet_reset(pkt, pkt_hdr->frame_len);
-	buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_data(pkt));
+	bufs_stockpile->ent[bufs_stockpile->size++].addr =
+		mv_sys_dma_mem_virt2phys(odp_packet_data(pkt));
 #else
-	buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
+	bufs_stockpile->ent[bufs_stockpile->size++].addr =
+		mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
 #endif
-
-	err = giu_bpool_put_buff(pktio_entry->s.pkt_mvgiu.bpool, &buff_inf);
+	if (bufs_stockpile->size == BUFFER_RELEASE_BURST_SIZE) {
+		err = giu_bpool_put_buffs(pktio_entry->s.pkt_mvgiu.bpool,
+					  bufs_stockpile->ent,
+					  &bufs_stockpile->size);
+		bufs_stockpile->size = 0;
+	}
 	return err;
 }
 
 static inline void mvgiu_free_sent_buffers(struct mvgiu_tx_shadow_q *shadow_q)
 {
-	struct mvgiu_buff_release_entry *entry;
+	struct giu_buff_inf *entry;
+	struct giu_bpool *bpool;
 	pktio_entry_t *pktio_entry;
+	odp_pktio_t pktio;
 	odp_packet_t pkt;
-	u16 i, num_conf = 0;
+	u16 i, num_conf = 0, num_bufs = 0, skip_bufs = 0;
 
 	num_conf = shadow_q->num_to_release;
 	shadow_q->num_to_release = 0;
+
 	for (i = 0; i < num_conf; i++) {
-		entry = &shadow_q->ent[shadow_q->read_ind];
-		if (unlikely(!entry->buff.addr)) {
+		entry = &shadow_q->ent[shadow_q->read_ind + num_bufs];
+		bpool = shadow_q->bpool[shadow_q->read_ind + num_bufs];
+		if (unlikely(!entry->addr)) {
 			ODP_ERR("Shadow memory @%d: cookie(%lx), pa(%lx)!\n",
-				shadow_q->read_ind, (u64)entry->buff.cookie,
-				(u64)entry->buff.addr);
+				shadow_q->read_ind, (u64)entry->cookie,
+				(u64)entry->addr);
+			skip_bufs = 1;
 			goto skip_buf;
 		}
 
-		if (unlikely(!entry->bpool)) {
-			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
+		if (unlikely(!bpool)) {
+			pkt = (odp_packet_t)((uintptr_t)entry->cookie);
 			odp_packet_free(pkt);
+			skip_bufs = 1;
 			goto skip_buf;
 		}
 
-		pktio_entry = get_pktio_entry(entry->input_pktio);
+		pktio = shadow_q->input_pktio[shadow_q->read_ind + num_bufs];
+		pktio_entry = get_pktio_entry(pktio);
 		if (unlikely(pktio_entry &&
 			     pktio_entry->s.state == PKTIO_STATE_FREE)) {
 			/* In case input pktio is in 'free' state, it means it
 			 * was already closed and this buffer should be return
 			 * to the ODP-POOL instead of the HW-Pool
 			 */
-			pkt = (odp_packet_t)((uintptr_t)entry->buff.cookie);
+			pkt = (odp_packet_t)((uintptr_t)entry->cookie);
 			odp_packet_hdr(pkt)->buf_hdr.ext_buf_free_cb = NULL;
 			odp_packet_free(pkt);
+			skip_bufs = 1;
 			goto skip_buf;
 		}
 
-		giu_bpool_put_buff(entry->bpool, &entry->buff);
+		num_bufs++;
+		if (unlikely(shadow_q->read_ind + num_bufs ==
+			     SHADOW_Q_MAX_SIZE))
+			goto skip_buf;
+		continue;
+
 skip_buf:
-		shadow_q->read_ind++;
-		shadow_q->read_ind =
-			shadow_q->read_ind & SHADOW_Q_MAX_SIZE_MASK;
-		shadow_q->size--;
+		if (num_bufs)
+			giu_bpool_put_buffs(shadow_q->bpool[shadow_q->read_ind],
+					    &shadow_q->ent[shadow_q->read_ind],
+					    &num_bufs);
+		num_bufs += skip_bufs;
+		shadow_q->read_ind = (shadow_q->read_ind + num_bufs) &
+				     SHADOW_Q_MAX_SIZE_MASK;
+		shadow_q->size -= num_bufs;
+		num_bufs = 0;
+		skip_bufs = 0;
+	}
+	if (num_bufs) {
+		giu_bpool_put_buffs(shadow_q->bpool[shadow_q->read_ind],
+				    &shadow_q->ent[shadow_q->read_ind],
+				    &num_bufs);
+		shadow_q->read_ind = (shadow_q->read_ind + num_bufs) &
+				     SHADOW_Q_MAX_SIZE_MASK;
+		shadow_q->size -= num_bufs;
 	}
 }
 
@@ -151,43 +186,43 @@ static int fill_bpool(odp_pool_t	pool,
 		      int		num,
 		      int		alloc_len)
 {
-	int			 i, err = 0;
+	int			 i, j = 0, err = 0;
 	odp_packet_hdr_t	*pkt_hdr;
-	odp_packet_t		 pkt;
-	struct giu_buff_inf	 buff_inf;
+	odp_packet_t		 pkt[num];
+	struct giu_buff_inf buff_array[num];
+	u16 final_num, num_bufs;
 
-	for (i = 0; i < num; i++) {
-		pkt = odp_packet_alloc(pool, alloc_len);
-		if (pkt == ODP_PACKET_INVALID) {
-			ODP_ERR("Allocated invalid pkt; skipping!\n");
-			continue;
-		}
-
-		if (!odp_packet_head(pkt)) {
-			ODP_ERR("Allocated invalid pkt (no buffer)!\n");
-			continue;
-		}
-		pkt_hdr = odp_packet_hdr(pkt);
-		if (pkt_hdr->buf_hdr.ext_buf_free_cb) {
-			ODP_ERR("pkt(%p) ext_buf_free_cb was set; skipping\n",
-				pkt);
-			continue;
-		}
-		pkt_hdr->buf_hdr.ext_buf_free_cb = mvgiu_free_buf;
-
-		buff_inf.cookie = (u64)pkt;
-#ifdef MVGIU_NO_HEADROOM
-		buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_data(pkt));
-#else
-		buff_inf.addr = mv_sys_dma_mem_virt2phys(odp_packet_head(pkt));
-#endif
-		err = giu_bpool_put_buff(bpool, &buff_inf);
-
-		if (err != 0)
-			return err;
+	final_num = packet_alloc_multi(pool, alloc_len, pkt, num);
+	if (final_num != num) {
+		ODP_ERR("No free packets left\n");
+		goto fail;
 	}
 
-	return 0;
+	for (i = 0; i < num; i++) {
+		pkt_hdr = odp_packet_hdr(pkt[i]);
+		if (pkt_hdr->buf_hdr.ext_buf_free_cb) {
+			ODP_ERR("pkt(%p)  ext_buf_free_cb was set; skipping\n",
+				pkt[i]);
+			continue;
+		}
+
+		pkt_hdr->buf_hdr.ext_buf_free_cb = mvgiu_free_buf;
+
+		buff_array[j].cookie = (u64)pkt[i];
+#ifdef MVGIU_NO_HEADROOM
+		buff_array[j].addr =
+			mv_sys_dma_mem_virt2phys(odp_packet_data(pkt[i]));
+#else
+		buff_array[j].addr =
+			mv_sys_dma_mem_virt2phys(odp_packet_head(pkt[i]));
+#endif
+
+		j++;
+	}
+	num_bufs = j;
+	err = giu_bpool_put_buffs(bpool, buff_array, &num_bufs);
+fail:
+	return err;
 }
 
 static void flush_bpool(struct giu_bpool *bpool)
@@ -354,11 +389,18 @@ static int mvgiu_close(pktio_entry_t *pktio_entry ODP_UNUSED)
 {
 	int tc = 0;
 	struct mvgiu_tx_shadow_q *shadow_q;
+	struct mvgiu_bufs_stockpile *bufs_stockpile;
 
 	if (pktio_entry->s.pkt_mvgiu.gpio) {
 		shadow_q = &pktio_entry->s.pkt_mvgiu.shadow_qs[tc];
 		shadow_q->num_to_release = shadow_q->size;
 		mvgiu_free_sent_buffers(shadow_q);
+		bufs_stockpile =
+			&pktio_entry->s.pkt_mvgiu.bufs_stockpile;
+		if (bufs_stockpile->size)
+			giu_bpool_put_buffs(pktio_entry->s.pkt_mvgiu.bpool,
+					    bufs_stockpile->ent,
+					    &bufs_stockpile->size);
 
 		/* Deinit the GIU port */
 		giu_gpio_remove(pktio_entry->s.pkt_mvgiu.gpio);
@@ -631,19 +673,19 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 #endif
 		giu_gpio_outq_desc_set_pkt_len(&descs[idx], len);
 		giu_gpio_outq_desc_set_phys_addr(&descs[idx], pa);
-		shadow_q->ent[shadow_q->write_ind].buff.addr = pa;
-		shadow_q->ent[shadow_q->write_ind].buff.cookie =
+		shadow_q->ent[shadow_q->write_ind].addr = pa;
+		shadow_q->ent[shadow_q->write_ind].cookie =
 			(u64)(uintptr_t)pkt;
 
 		input_entry = get_pktio_entry(pkt_hdr->input);
 		if (odp_likely(input_entry &&
 			       input_entry->s.ops == &mvgiu_pktio_ops)) {
-			shadow_q->ent[shadow_q->write_ind].bpool =
+			shadow_q->bpool[shadow_q->write_ind] =
 				pkt_mvgiu->bpool;
-			shadow_q->ent[shadow_q->write_ind].input_pktio =
+			shadow_q->input_pktio[shadow_q->write_ind] =
 				pkt_hdr->input;
 		} else {
-			shadow_q->ent[shadow_q->write_ind].bpool = NULL;
+			shadow_q->bpool[shadow_q->write_ind] = NULL;
 		}
 
 		shadow_q->write_ind = (shadow_q->write_ind + 1) &

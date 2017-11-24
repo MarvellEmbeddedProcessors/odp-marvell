@@ -28,6 +28,7 @@
 #define MAX_NUM_OUTQS_PER_CORE	MVPP2_MAX_NUM_TX_TCS_PER_PORT
 #define SHADOW_Q_MAX_SIZE	MVPP2_TXQ_SIZE	/* Should be power of 2 */
 #define SHADOW_Q_MAX_SIZE_MASK	(SHADOW_Q_MAX_SIZE - 1)
+#define BUFFER_RELEASE_BURST_SIZE	64
 
 ODP_STATIC_ASSERT((CHECK_IS_POWER2(SHADOW_Q_MAX_SIZE)), \
 	"SHADOW_Q_MAX_SIZE should be power of 2");
@@ -37,6 +38,11 @@ ODP_STATIC_ASSERT((CHECK_IS_POWER2(SHADOW_Q_MAX_SIZE)), \
 #define REGFILE_NAME_PREFIX     "nic-pf-"
 #define REGFILE_MAX_FILE_NAME   64
 #endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
+
+struct mvpp2_bufs_stockpile {
+	u16				size;
+	struct buff_release_entry	ent[BUFFER_RELEASE_BURST_SIZE];
+};
 
 struct mvpp2_tx_shadow_q {
 	/* read index - used when releasing buffers */
@@ -57,10 +63,9 @@ struct mvpp2_tx_shadow_q {
 };
 
 #ifdef ODP_PKTIO_MVGIU
-struct mvgiu_buff_release_entry {
-	struct giu_buff_inf	buff;	/* pointer to the buffer object */
-	struct giu_bpool	*bpool;	/* pointer to the bpool object */
-	odp_pktio_t		input_pktio;
+struct mvgiu_bufs_stockpile {
+	u16			size;
+	struct giu_buff_inf	ent[BUFFER_RELEASE_BURST_SIZE];
 };
 
 struct mvgiu_tx_shadow_q {
@@ -73,7 +78,13 @@ struct mvgiu_tx_shadow_q {
 	/* number of buffers sent, that can be released */
 	u16			num_to_release;
 	/* queue entries */
-	struct mvgiu_buff_release_entry	ent[SHADOW_Q_MAX_SIZE];
+	struct giu_buff_inf	ent[SHADOW_Q_MAX_SIZE];
+	struct giu_bpool	*bpool[SHADOW_Q_MAX_SIZE];
+	/* input-pktio for each buff-entry; the queue-entries MUST be of type
+	 * 'giu_buff_inf' as there is an assumption it is continuous
+	 * when it is used in 'giu_bpool_put_buffs'
+	 */
+	odp_pktio_t		input_pktio[SHADOW_Q_MAX_SIZE];
 };
 #endif /* ODP_PKTIO_MVGIU */
 
@@ -106,6 +117,7 @@ typedef struct {
 	int			num_out_queues;
 	struct mvpp2_tx_shadow_q
 		shadow_qs[MVPP2_TOTAL_NUM_HIFS][MAX_NUM_OUTQS_PER_CORE];
+	struct mvpp2_bufs_stockpile bufs_stockpile_array[MVPP2_TOTAL_NUM_HIFS];
 	u8			num_inqs;
 	struct inq_info		inqs[MVPP2_MAX_NUM_RX_QS_PER_PORT];
 	enum pp2_ppio_hash_type	hash_type;
@@ -128,6 +140,7 @@ typedef struct {
 	odp_pktio_capability_t	capa;	/**< interface capabilities */
 	struct mvgiu_tx_shadow_q
 		shadow_qs[MAX_NUM_OUTQS_PER_CORE];
+	struct mvgiu_bufs_stockpile bufs_stockpile;
 	struct inq_info	inqs[MVGIU_MAX_NUM_QS_PER_TC];
 } pkt_mvgiu_t;
 #endif /* ODP_PKTIO_MVGIU */
