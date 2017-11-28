@@ -2678,6 +2678,18 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 					appl_args->lan_vid[i]);
 				tap_str += strlen(tap_str);
 			}
+			if (i == 0) {
+				printf("LAN VID is required\n");
+				usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			/* verify there is no additional tokens */
+			if (token != NULL) {
+				printf("Invalid LAN VID input\n");
+				printf("Maximum %d LAN VIDs are supported\n",
+				       ODP_NAT_MAX_LAN_VID);
+				exit(EXIT_FAILURE);
+			}
 			appl_args->if_lan_count = i;
 			appl_args->dsa_mode = 1;
 			break;
@@ -2721,6 +2733,18 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 				sprintf(tap_str, ",wan%d",
 					appl_args->wan_vid[i]);
 				tap_str += strlen(tap_str);
+			}
+			if (i == 0) {
+				printf("WAN VID is required\n");
+				usage(argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			/* verify there is no additional tokens */
+			if (token != NULL) {
+				printf("Invalid WAN VID input\n");
+				printf("Maximum %d WAN VIDs are supported\n",
+				       ODP_NAT_MAX_WAN_IP);
+				exit(EXIT_FAILURE);
 			}
 			appl_args->if_wan_count = i;
 			appl_args->dsa_mode = 1;
