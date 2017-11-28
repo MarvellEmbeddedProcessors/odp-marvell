@@ -127,7 +127,6 @@ typedef struct {
 	enum checksum_offload_mode checksum_offload; /**< Checksum offload */
 	int echo;	        /**< Echo packet */
 	int num_buffers_per_queue;
-
 } appl_args_t;
 
 static int exit_threads;	/**< Break workers loop if set to 1 */
@@ -422,20 +421,27 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	odp_pktio_config_init(&config);
 	if ((gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_VALIDATION) ||
 		(gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_ALL)) {
-		config.pktin.bit.ipv4_chksum = 1;
-		config.pktin.bit.udp_chksum = 1;
-		config.pktin.bit.tcp_chksum = 1;
+		config.pktin.bit.ipv4_chksum =
+			capa.config.pktin.bit.ipv4_chksum;
+		config.pktin.bit.udp_chksum = capa.config.pktin.bit.udp_chksum;
+		config.pktin.bit.tcp_chksum = capa.config.pktin.bit.tcp_chksum;
 	}
 	if ((gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_GENERATION) ||
 		(gbl_args->appl.checksum_offload == CHECKSUM_OFFLOAD_MODE_ALL)) {
-		config.pktout.bit.ipv4_chksum = 1;
-		config.pktout.bit.udp_chksum = 1;
-		config.pktout.bit.tcp_chksum = 1;
+		config.pktout.bit.ipv4_chksum =
+			capa.config.pktout.bit.ipv4_chksum;
+		config.pktout.bit.udp_chksum =
+			capa.config.pktout.bit.udp_chksum;
+		config.pktout.bit.tcp_chksum =
+			capa.config.pktout.bit.tcp_chksum;
 	}
 	if (gbl_args->appl.error_mode == ERROR_MODE_CHECK_N_DROP_ODP) {
-		config.pktin.bit.drop_ipv4_err = 1;
-		config.pktin.bit.drop_udp_err = 1;
-		config.pktin.bit.drop_tcp_err = 1;
+		config.pktin.bit.drop_ipv4_err =
+			capa.config.pktin.bit.drop_ipv4_err;
+		config.pktin.bit.drop_udp_err =
+			capa.config.pktin.bit.drop_udp_err;
+		config.pktin.bit.drop_tcp_err =
+			capa.config.pktin.bit.drop_tcp_err;
 	}
 
 	if (odp_pktio_config(pktio, &config)) {
