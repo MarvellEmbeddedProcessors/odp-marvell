@@ -2026,11 +2026,12 @@ int packet_parse_common(packet_parser_t *prs, const uint8_t *ptr,
 		ip_proto = 255;  /* Reserved invalid by IANA */
 	}
 
+	prs->l4_offset = offset;
+
 	if (layer == ODP_PKTIO_PARSER_LAYER_L3)
 		return prs->error_flags.all != 0;
 
-	/* Set l4_offset+flag only for known ip_proto */
-	prs->l4_offset = offset;
+	/* Set flag only for known ip_proto */
 	prs->input_flags.l4 = 1;
 
 	/* Parse Layer 4 headers */
@@ -2072,7 +2073,6 @@ int packet_parse_common(packet_parser_t *prs, const uint8_t *ptr,
 
 	default:
 		prs->input_flags.l4 = 0;
-		prs->l4_offset = ODP_PACKET_OFFSET_INVALID;
 		break;
 	}
 parse_exit:

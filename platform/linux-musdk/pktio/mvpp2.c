@@ -1274,7 +1274,6 @@ static inline void parse_other_l4_protocol(odp_packet_hdr_t *pkt_hdr)
 		break;
 	default:
 		pkt_hdr->p.input_flags.l4 = 0;
-		pkt_hdr->p.l4_offset = ODP_PACKET_OFFSET_INVALID;
 		break;
 	}
 }
@@ -1452,6 +1451,41 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	return total_got;
 }
 
+static inline int
+mrvl_prepare_proto_info(odp_pktout_config_opt_t config_flags,
+			_odp_packet_input_flags_t packet_input_flags,
+			enum pp2_outq_l3_type *l3_type,
+			enum pp2_outq_l4_type *l4_type,
+			int *gen_l3_cksum,
+			int *gen_l4_cksum)
+{
+	if (packet_input_flags.ipv4) {
+		*l3_type = PP2_OUTQ_L3_TYPE_IPV4;
+		*gen_l3_cksum = config_flags.bit.ipv4_chksum;
+	} else if (packet_input_flags.ipv6) {
+		*l3_type = PP2_OUTQ_L3_TYPE_IPV6;
+		/* no checksum for ipv6 header */
+		*gen_l3_cksum = 0;
+	} else {
+		/* if something different then stop processing */
+		return -1;
+	}
+
+	if (packet_input_flags.tcp) {
+		*l4_type = PP2_OUTQ_L4_TYPE_TCP;
+		*gen_l4_cksum = config_flags.bit.tcp_chksum;
+	} else if (packet_input_flags.udp) {
+		*l4_type = PP2_OUTQ_L4_TYPE_UDP;
+		*gen_l4_cksum = config_flags.bit.udp_chksum;
+	} else {
+		*l4_type = PP2_OUTQ_L4_TYPE_OTHER;
+		/* no checksum for other type */
+		*gen_l4_cksum = 0;
+	}
+
+	return 0;
+}
+
 /* An implementation for enqueuing packets */
 static int mvpp2_send(pktio_entry_t *pktio_entry,
 		      int txq_id,
@@ -1469,10 +1503,13 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 	dma_addr_t		 pa;
 	u16			 i, num, len, idx = 0;
 	u8			 tc;
-	int			 sent = 0;
+	int			 ret, sent = 0;
 	pkt_mvpp2_t		*pkt_mvpp2 = &pktio_entry->s.pkt_mvpp2;
 	pktio_entry_t		*input_entry;
 	struct odp_pktio_config_t *config = &pktio_entry->s.config;
+	int gen_l3_cksum, gen_l4_cksum;
+	enum pp2_outq_l3_type l3_type;
+	enum pp2_outq_l4_type l4_type;
 
 	/* TODO: only support now RSS; no support for QoS; how to translate txq_id to tc/hif???? */
 	tc = 0;
@@ -1523,39 +1560,23 @@ static int mvpp2_send(pktio_entry_t *pktio_entry,
 		pp2_ppio_outq_desc_set_pkt_offset(&descs[idx], odp_packet_headroom(pkt));
 		pp2_ppio_outq_desc_set_pkt_len(&descs[idx], len);
 
-		/* Update the slot for csum_offload */
-		if (odp_likely(pkt_hdr->p.l3_offset != ODP_PACKET_OFFSET_INVALID)) {
-			enum pp2_outq_l3_type l3_type =
-				pkt_hdr->p.input_flags.ipv4 ? PP2_OUTQ_L3_TYPE_IPV4 :
-				pkt_hdr->p.input_flags.ipv6 ? PP2_OUTQ_L3_TYPE_IPV6 : PP2_OUTQ_L3_TYPE_OTHER;
+		/*
+		 * in case unsupported input_flags were passed
+		 * do not update descriptor offload information
+		 */
 
-			if (odp_likely((l3_type != PP2_OUTQ_L3_TYPE_OTHER) &&
-				       (pkt_hdr->p.l4_offset != ODP_PACKET_OFFSET_INVALID))) {
-				if (odp_likely(pkt_hdr->p.input_flags.tcp))
-					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
-									  l3_type,
-									  PP2_OUTQ_L4_TYPE_TCP,
-									  pkt_hdr->p.l3_offset,
-									  pkt_hdr->p.l4_offset,
-									  config->pktout.bit.ipv4_chksum,
-									  config->pktout.bit.tcp_chksum);
-				else if (odp_likely(pkt_hdr->p.input_flags.udp))
-					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
-									  l3_type,
-									  PP2_OUTQ_L4_TYPE_UDP,
-									  pkt_hdr->p.l3_offset,
-									  pkt_hdr->p.l4_offset,
-									  config->pktout.bit.ipv4_chksum,
-									  config->pktout.bit.udp_chksum);
-				else
-					pp2_ppio_outq_desc_set_proto_info(&descs[idx],
-									  l3_type,
-									  PP2_OUTQ_L4_TYPE_OTHER,
-									  pkt_hdr->p.l3_offset,
-									  pkt_hdr->p.l4_offset,
-									  1,
-									  0);
-			}
+		ret = mrvl_prepare_proto_info(config->pktout,
+					      pkt_hdr->p.input_flags,
+					      &l3_type, &l4_type, &gen_l3_cksum,
+					      &gen_l4_cksum);
+		if (odp_likely(!ret)) {
+			pp2_ppio_outq_desc_set_proto_info(&descs[idx],
+							  l3_type,
+							  l4_type,
+							  pkt_hdr->p.l3_offset,
+							  pkt_hdr->p.l4_offset,
+							  gen_l3_cksum,
+							  gen_l4_cksum);
 		}
 
 #ifdef USE_HW_BUFF_RECYLCE
