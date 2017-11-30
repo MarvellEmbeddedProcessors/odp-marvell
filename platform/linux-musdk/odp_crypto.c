@@ -177,6 +177,7 @@ struct crypto_cio_info {
 	unsigned int             io_enqs_offs;
 	unsigned int             requests_cnt;
 	unsigned int             requests_offs;
+	unsigned int             requests_pend_cnt;
 	struct sam_cio_op_params sam_op_params[MVSAM_RING_SIZE * 2];
 	struct crypto_request	 requests[MVSAM_RING_SIZE * 2];
 	struct sam_cio           *cio_hw;
@@ -447,6 +448,7 @@ static inline int mvsam_result_enq(struct sam_cio_op_result *sam_res, int num_re
 		cio = result->cio;
 		cio->io_enqs_cnt -= num_res;
 		crp_thr->app_enqs_cnt += num_res;
+		cio->requests_cnt -= num_res;
 	}
 	return 0;
 }
@@ -461,7 +463,7 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 	struct sam_cio_op_result sam_res_params[MVSAM_RING_SIZE];
 	u16			 num_reqs;
 	int			 rc = 0, flush_io_qs = 0;
-	unsigned int tmp_offs, requests_offs, i;
+	unsigned int requests_offs, i;
 	NOTUSED(result);
 	crp_thr       = get_crp_thread();
 	if(odp_unlikely(crp_thr == NULL))
@@ -497,27 +499,29 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 			if (odp_unlikely(rc))
 				return rc;
 		}
-		if ((flush_io_qs && cio->requests_cnt) ||
-			(cio->requests_cnt >= REQ_THRSHLD_LO)) {
+		num_reqs = 0;
+		if (cio->requests_pend_cnt >= REQ_THRSHLD_LO)
 			num_reqs = PROCESS_PKT_BURST_SIZE;
-			if ((cio->io_enqs_offs > cio->requests_offs) &&
-				((REQ_THRSHLD_HI - cio->io_enqs_offs) < PROCESS_PKT_BURST_SIZE))
-				num_reqs = (REQ_THRSHLD_HI - cio->io_enqs_offs);
-			else if ((cio->io_enqs_offs <= cio->requests_offs) &&
-					 ((cio->requests_offs - cio->io_enqs_offs) < PROCESS_PKT_BURST_SIZE))
-				num_reqs = (cio->requests_offs - cio->io_enqs_offs);
+		else if (flush_io_qs && cio->requests_pend_cnt)
+			num_reqs = cio->requests_pend_cnt;
+
+		if ((cio->io_enqs_offs + num_reqs) > (MVSAM_RING_SIZE * 2))
+			num_reqs = (MVSAM_RING_SIZE * 2) - cio->io_enqs_offs;
+
+		if (num_reqs > 0) {
 			rc = sam_cio_enq(cio->cio_hw, &cio->sam_op_params[cio->io_enqs_offs], &num_reqs);
-			if(odp_unlikely(rc)) {
+			if (odp_unlikely(rc)) {
 				ODP_ERR("odp_musdk: failed to enqueue %d requests (%d)!\n",
-				cio->requests_cnt, rc);
+				num_reqs, rc);
 				/* TODO: drop all err pkts! */
 				return rc;
 			}
-			cio->requests_cnt -= num_reqs;
+
 			cio->io_enqs_cnt  += num_reqs;
 			cio->io_enqs_offs += num_reqs;
-			if (cio->io_enqs_offs >= REQ_THRSHLD_HI)
-				cio->io_enqs_offs -= REQ_THRSHLD_HI;
+			cio->requests_pend_cnt -= num_reqs;
+			if (cio->io_enqs_offs == ((MVSAM_RING_SIZE * 2)))
+				cio->io_enqs_offs = 0;
 		}
 	}
 
@@ -526,18 +530,11 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 
 	session  = (struct crypto_session *)params->session;
 	cio = get_crp_thr_cio(crp_thr, session->op);
-	if (cio->io_enqs_cnt >= MVSAM_RING_SIZE) {
-		*posted = 0;
-		result->ok = 0;
-		return 0;
-	}
 	requests_offs = cio->requests_offs;
 
-	tmp_offs = requests_offs + 1;
-	if (tmp_offs == REQ_THRSHLD_HI)
-		tmp_offs = 0;
-	if (tmp_offs == cio->io_enqs_offs) {
-		ODP_DBG("Requests ring is full (%d)!\n", cio->requests_cnt);
+	/* prevent rep around. don't allow more than twice MVSAM_RING_SIZE */
+	if (cio->requests_cnt == (MVSAM_RING_SIZE * 2)) {
+		ODP_DBG("odp crypto Q is full (%d)!\n", cio->io_enqs_cnt);
 		*posted = 0;
 		result->ok = 0;
 		return 0;
@@ -580,9 +577,12 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 	cio->requests[requests_offs].cio        = cio;
 
 	cio->requests_offs++;
-	if (cio->requests_offs == REQ_THRSHLD_HI)
-		cio->requests_offs = 0;
 	cio->requests_cnt++;
+	cio->requests_pend_cnt++;
+
+	if (cio->requests_offs == MVSAM_RING_SIZE * 2)
+		cio->requests_offs = 0;
+
 	/* Indicate to caller operation was async, */
 	/* no packet received from device          */
 	*posted = 1;
