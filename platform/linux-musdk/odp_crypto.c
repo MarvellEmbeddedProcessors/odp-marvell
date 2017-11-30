@@ -181,6 +181,7 @@ struct crypto_cio_info {
 	struct sam_cio_op_params sam_op_params[MVSAM_RING_SIZE * 2];
 	struct crypto_request	 requests[MVSAM_RING_SIZE * 2];
 	struct sam_cio           *cio_hw;
+	unsigned int             cio_id;
 };
 
 struct crypto_thread_info
@@ -614,6 +615,7 @@ static int mvsam_odp_crypto_init_cio(int num_of_threads, int num_local_cios)
 			snprintf(name, sizeof(name), "cio-%d:%d", cio_local_idx, cio_id);
 			ODP_PRINT("found cio: %s\n", name);
 			err = sam_cio_init(&cio_params, &crp_thread[i].cio[cio_local_idx].cio_hw);
+			cio_params.size = MVSAM_RING_SIZE;
 
 			if (err != 0)
 				return err;
@@ -621,6 +623,7 @@ static int mvsam_odp_crypto_init_cio(int num_of_threads, int num_local_cios)
 				ODP_ERR("CIO init failed. cio %d local_cio %d!\n", i, cio_local_idx, i);
 				return -1;
 			}
+			crp_thread[i].cio[cio_local_idx].cio_id = cio_id;
 		}
 	}
 	return err;
