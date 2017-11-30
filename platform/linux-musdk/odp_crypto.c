@@ -526,6 +526,11 @@ static int mvsam_odp_crypto_operation(odp_crypto_op_param_t *params,
 
 	session  = (struct crypto_session *)params->session;
 	cio = get_crp_thr_cio(crp_thr, session->op);
+	if (cio->io_enqs_cnt >= MVSAM_RING_SIZE) {
+		*posted = 0;
+		result->ok = 0;
+		return 0;
+	}
 	requests_offs = cio->requests_offs;
 
 	tmp_offs = requests_offs + 1;
