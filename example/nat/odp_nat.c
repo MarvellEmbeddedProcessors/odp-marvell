@@ -1729,12 +1729,13 @@ static int process_pkt(odp_packet_t pkt_tbl[], unsigned num, odp_nat_pktio_t *pk
 
 	if (odp_likely(to_send)) {
 		sent = odp_pktout_send(pktio->pktout, send_pkt_tbl, to_send);
-		if (odp_unlikely(to_send > sent))
+		if (odp_unlikely(to_send > sent)) {
 			if (odp_unlikely(sent < 0))
 				sent = 0;
 			/* Drop rejected packets */
 			odp_packet_free_multi(&send_pkt_tbl[sent],
 					      to_send - sent);
+		}
 	}
 
 	return (sent + control_sent);
