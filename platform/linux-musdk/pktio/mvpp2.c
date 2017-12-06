@@ -881,10 +881,14 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 			if (pktio_entry->s.cls_enabled)
 				tcs_params->num_in_qs = 1;
 			memset(inq_params, 0, sizeof(inq_params));
-			for (j = 0; j < tcs_params->num_in_qs; j++)
+			for (j = 0; j < tcs_params->num_in_qs; j++) {
 				inq_params[j].size = rx_queue_size;
+				inq_params[j].mem = NULL;
+				inq_params[j].tc_pools_mem_id_index = 0;
+			}
 			tcs_params->inqs_params = inq_params;
-			tcs_params->pools[0] = pktio_entry->s.pkt_mvpp2.bpool;
+			tcs_params->pools[0][0] =
+				pktio_entry->s.pkt_mvpp2.bpool;
 		}
 		port_params.outqs_params.num_outqs =
 			MVPP2_MAX_NUM_TX_TCS_PER_PORT;
