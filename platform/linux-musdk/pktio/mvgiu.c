@@ -603,6 +603,29 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 	return total_got;
 }
 
+static inline int
+mrvl_prepare_proto_info(_odp_packet_input_flags_t packet_input_flags,
+			enum giu_outq_l3_type *l3_type,
+			enum giu_outq_l4_type *l4_type)
+{
+	if (packet_input_flags.ipv4)
+		*l3_type = GIU_OUTQ_L3_TYPE_IPV4_NO_OPTS;
+	else if (packet_input_flags.ipv6)
+		*l3_type = GIU_OUTQ_L3_TYPE_IPV6_NO_EXT;
+	else
+		/* if something different then stop processing */
+		return -1;
+
+	if (packet_input_flags.tcp)
+		*l4_type = GIU_OUTQ_L4_TYPE_TCP;
+	else if (packet_input_flags.udp)
+		*l4_type = GIU_OUTQ_L4_TYPE_UDP;
+	else
+		*l4_type = GIU_OUTQ_L4_TYPE_OTHER;
+
+	return 0;
+}
+
 /* An implementation for enqueuing packets */
 static int mvgiu_send(pktio_entry_t *pktio_entry,
 		      int txq_id,
@@ -617,9 +640,11 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 	dma_addr_t		pa;
 	u16			i, num, len, idx = 0;
 	u8			tc;
-	int			sent = 0;
+	int			ret, sent = 0;
 	pkt_mvgiu_t		*pkt_mvgiu = &pktio_entry->s.pkt_mvgiu;
 	pktio_entry_t		*input_entry;
+	enum giu_outq_l3_type	l3_type;
+	enum giu_outq_l4_type	l4_type;
 
 	tc = 0;
 	txq_id = 0;
@@ -673,6 +698,22 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 #endif
 		giu_gpio_outq_desc_set_pkt_len(&descs[idx], len);
 		giu_gpio_outq_desc_set_phys_addr(&descs[idx], pa);
+
+		/*
+		 * in case unsupported input_flags were passed
+		 * do not update descriptor offload information
+		 */
+
+		ret = mrvl_prepare_proto_info(pkt_hdr->p.input_flags,
+					      &l3_type, &l4_type);
+		if (odp_likely(!ret)) {
+			giu_gpio_outq_desc_set_proto_info(&descs[idx],
+							  l3_type,
+							  l4_type,
+							  pkt_hdr->p.l3_offset,
+							  pkt_hdr->p.l4_offset);
+		}
+
 		shadow_q->ent[shadow_q->write_ind].addr = pa;
 		shadow_q->ent[shadow_q->write_ind].cookie =
 			(u64)(uintptr_t)pkt;
