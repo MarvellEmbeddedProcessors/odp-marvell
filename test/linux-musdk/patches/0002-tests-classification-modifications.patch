@@ -1,4 +1,4 @@
-From 024821146c85fa5cb88f2165da47274930fcf8cc Mon Sep 17 00:00:00 2001
+From a713c9cc6a24453fabd77fe05e793688a1c23bf4 Mon Sep 17 00:00:00 2001
 From: Liron Himi <lironh@marvell.com>
 Date: Wed, 11 Oct 2017 01:37:38 +0300
 Subject: [PATCH 2/2] tests: classification modifications
@@ -10,9 +10,9 @@ Signed-off-by: Liron Himi <lironh@marvell.com>
  .../validation/api/classification/classification.c |   2 +
  .../validation/api/classification/classification.h |  16 ++-
  .../api/classification/odp_classification_common.c |  34 +++++-
- .../api/classification/odp_classification_tests.c  | 125 ++++++++++++++++++++-
+ .../api/classification/odp_classification_tests.c  | 128 ++++++++++++++++++++-
  .../classification/odp_classification_testsuites.h |   3 +
- 6 files changed, 172 insertions(+), 10 deletions(-)
+ 6 files changed, 173 insertions(+), 12 deletions(-)
 
 diff --git a/platform/linux-generic/odp_pool.c b/platform/linux-generic/odp_pool.c
 index 40db8dd..cf078cf 100644
@@ -193,7 +193,7 @@ index eca30b8..66d6ca8 100644
  	} else {
  		/* ipv6 */
 diff --git a/test/common_plat/validation/api/classification/odp_classification_tests.c b/test/common_plat/validation/api/classification/odp_classification_tests.c
-index 4f43082..1db8a1a 100644
+index 4f43082..5615507 100644
 --- a/test/common_plat/validation/api/classification/odp_classification_tests.c
 +++ b/test/common_plat/validation/api/classification/odp_classification_tests.c
 @@ -8,6 +8,8 @@
@@ -278,7 +278,17 @@ index 4f43082..1db8a1a 100644
  
  	return retcode;
  }
-@@ -515,6 +544,96 @@ void test_cos_with_l2_priority(void)
+@@ -383,8 +412,7 @@ void test_pktio_error_cos(void)
+ 	CU_ASSERT_FATAL(pkt != ODP_PACKET_INVALID);
+ 	odph_ipv4hdr_t *ip = (odph_ipv4hdr_t *)odp_packet_l3_ptr(pkt, NULL);
+ 
+-	/* Incorrect IpV4 version */
+-	ip->ver_ihl = 8 << 4 | ODPH_IPV4HDR_IHL_MIN;
++	/* Incorrect IpV4 checksun */
+ 	ip->chksum = 0;
+ 	enqueue_pktio_interface(pkt, pktio_loop);
+ 
+@@ -515,6 +543,96 @@ void test_cos_with_l2_priority(void)
  	}
  }
  
@@ -375,7 +385,7 @@ index 4f43082..1db8a1a 100644
  void configure_pmr_cos(void)
  {
  	uint16_t val;
-@@ -691,6 +810,8 @@ void classification_test_pktio_configure(void)
+@@ -691,6 +809,8 @@ void classification_test_pktio_configure(void)
  		configure_cls_pmr_chain();
  	if (TEST_L2_QOS)
  		configure_cos_with_l2_priority();
@@ -384,7 +394,7 @@ index 4f43082..1db8a1a 100644
  	if (TEST_PMR)
  		configure_pmr_cos();
  	if (TEST_PMR_SET)
-@@ -708,6 +829,8 @@ void classification_test_pktio_test(void)
+@@ -708,6 +828,8 @@ void classification_test_pktio_test(void)
  		test_cls_pmr_chain();
  	if (TEST_L2_QOS)
  		test_cos_with_l2_priority();
