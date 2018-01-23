@@ -82,28 +82,11 @@ static int cleanup_files(const char *dirpath, int odp_pid)
 static int nmp_init_all(void)
 {
 	int ret;
-	struct nmp_params params;
-
-	/* NMP parameters allocate */
-	params.lfs_params =
-		kcalloc(1, sizeof(union nmp_lf_params), GFP_KERNEL);
-	if (params.lfs_params == NULL)
-		return -1;
-
-	/* NMP profile parameters */
-	params.lfs_params->pf.lcl_egress_q_num   = 1;
-	params.lfs_params->pf.lcl_egress_q_size  = 2048;
-	params.lfs_params->pf.lcl_ingress_q_num  = 1;
-	params.lfs_params->pf.lcl_ingress_q_size = 2048;
-	params.lfs_params->pf.lcl_bm_q_num       = 1;
-	params.lfs_params->pf.lcl_bm_q_size      = 2048;
-	params.lfs_params->pf.lcl_bm_buf_size    = 2048;
+	struct nmp_params nmp_params;
 
 	/* NMP initialization */
-	ret = nmp_init(&params, &nmp);
-
-	/* NMP parameters release */
-	kfree(params.lfs_params);
+	memset(&nmp_params, 0, sizeof(nmp_params));
+	ret = nmp_init(&nmp_params, &nmp);
 
 	return ret;
 }
