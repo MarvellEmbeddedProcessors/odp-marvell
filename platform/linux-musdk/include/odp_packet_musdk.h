@@ -22,6 +22,7 @@
 #endif /* ODP_PKTIO_MVGIU */
 #if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
 #include <mng/mv_nmp.h>
+#include <mng/mv_nmp_guest.h>
 #include <fcntl.h>
 #endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
 
@@ -38,6 +39,12 @@ ODP_STATIC_ASSERT((CHECK_IS_POWER2(SHADOW_Q_MAX_SIZE)), \
 #define REGFILE_NAME_PREFIX     "nic-pf-"
 #define REGFILE_MAX_FILE_NAME   64
 #endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
+#ifdef ODP_MVNMP_GUEST_MODE
+/* NMP Guest ID */
+#define NMP_GUEST_ID		2
+/* NMP Guest Timeout (ms)*/
+#define NMP_GUEST_TIMEOUT	1000
+#endif /* ODP_MVNMP_GUEST_MODE */
 
 struct mvpp2_bufs_stockpile {
 	u16				size;
@@ -99,8 +106,6 @@ struct inq_info {
 };
 
 typedef struct {
-	uint16_t		pp_id;
-	uint16_t		ppio_id;
 	uint16_t		bpool_id;
 	uint16_t		mtu;
 

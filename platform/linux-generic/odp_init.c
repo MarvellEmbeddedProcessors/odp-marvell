@@ -25,7 +25,7 @@
 #define _ODP_TMPDIR    "/tmp"
 
 #if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
-#include <odp_packet_musdk.h>
+#include <nmp_guest_utils.h>
 #endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
 
 #ifdef ODP_MVNMP
@@ -86,6 +86,12 @@ static int nmp_init_all(void)
 
 	/* NMP initialization */
 	memset(&nmp_params, 0, sizeof(nmp_params));
+	ret = nmp_read_cfg_file(NULL, &nmp_params);
+	if (ret) {
+		ODP_ERR("NMP preinit failed with error %d\n", ret);
+		return -EIO;
+	}
+
 	ret = nmp_init(&nmp_params, &nmp);
 
 	return ret;
@@ -99,6 +105,73 @@ void nmp_schedule_all(struct nmp *nmp)
 	nmp_schedule(nmp, NMP_SCHED_TX);
 }
 #endif /* ODP_MVNMP */
+
+#if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
+static int wait_for_pf_init_done(void)
+{
+	char	file_name[REGFILE_MAX_FILE_NAME];
+	int	timeout = 100000; /* 10s timeout */
+	int	fd, err;
+
+	/* Map GIU regfile */
+	snprintf(file_name,
+		 sizeof(file_name),
+		 "%s%s%d", REGFILE_VAR_DIR, REGFILE_NAME_PREFIX, 0);
+
+	/* remove file from previous runs */
+	err = remove(file_name);
+	/* check if there was an error and if so check that it's not
+	 * "No such file or directory"
+	 */
+	if (err && errno != 2) {
+		ODP_ERR("can't delete regfile! (%s)\n", strerror(errno));
+		return err;
+	}
+
+	/* wait for regfile to be opened by NMP */
+	do {
+#ifdef ODP_MVNMP
+		nmp_schedule_all(nmp);
+#endif /* ODP_MVNMP */
+		fd = open(file_name, O_RDWR);
+		if (fd > 0)
+			close(fd);
+		usleep_range(100, 110);
+	} while (fd < 0 && --timeout);
+
+	if (!timeout) {
+		ODP_ERR("failed to find regfile %s. timeout exceeded.\n",
+			file_name);
+		return -EFAULT;
+	}
+
+#ifdef ODP_MVNMP
+	/* Make sure that last command response is sent to host. */
+	nmp_schedule_all(nmp);
+#endif /* ODP_MVNMP */
+
+	return 0;
+}
+#endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
+
+#ifdef ODP_MVNMP_GUEST_MODE
+struct nmp_guest *nmp_guest;
+char *guest_prb_str;
+
+static int nmp_guest_init_all(void)
+{
+	struct nmp_guest_params nmp_guest_params;
+
+	/* NMP Guest initializations */
+	nmp_guest_params.id = NMP_GUEST_ID;
+	nmp_guest_params.timeout = NMP_GUEST_TIMEOUT;
+	nmp_guest_init(&nmp_guest_params, &nmp_guest);
+
+	nmp_guest_get_probe_str(nmp_guest, &guest_prb_str);
+
+	return 0;
+}
+#endif /* ODP_MVNMP_GUEST_MODE */
 
 int odp_init_global(odp_instance_t *instance,
 		    const odp_init_t *params,
@@ -186,6 +259,17 @@ int odp_init_global(odp_instance_t *instance,
 		goto init_failed;
 	}
 #endif /* ODP_MVNMP */
+#if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
+	if (wait_for_pf_init_done())
+		goto init_failed;
+#endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
+
+#ifdef ODP_MVNMP_GUEST_MODE
+	if (nmp_guest_init_all()) {
+		ODP_ERR("ODP nmp guest init failed.\n");
+		goto init_failed;
+	}
+#endif /* ODP_MVNMP_GUEST_MODE */
 
 	if (odp_pktio_init_global()) {
 		ODP_ERR("ODP packet io init failed.\n");
@@ -223,50 +307,6 @@ int odp_init_global(odp_instance_t *instance,
 	}
 
 	*instance = (odp_instance_t)odp_global_data.main_pid;
-
-#if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
-	char	file_name[REGFILE_MAX_FILE_NAME];
-	int	timeout = 100000; /* 10s timeout */
-	int	fd, err;
-
-	/* Map GIU regfile */
-	snprintf(file_name,
-		 sizeof(file_name),
-		 "%s%s%d", REGFILE_VAR_DIR, REGFILE_NAME_PREFIX, 0);
-
-	/* remove file from previous runs */
-	err = remove(file_name);
-	/* check if there was an error and if so check that it's not
-	 * "No such file or directory"
-	 */
-	if (err && errno != 2) {
-		ODP_ERR("can't delete regfile! (%s)\n", strerror(errno));
-		goto init_failed;
-	}
-
-	/* wait for regfile to be opened by NMP */
-	do {
-#ifdef ODP_MVNMP
-		nmp_schedule_all(nmp);
-#endif /* ODP_MVNMP */
-		fd = open(file_name, O_RDWR);
-		if (fd > 0)
-			close(fd);
-		usleep_range(100, 110);
-	} while (fd < 0 && --timeout);
-
-	if (!timeout) {
-		ODP_ERR("failed to find regfile %s. timeout exceeded.\n",
-			file_name);
-		return -EFAULT;
-	}
-
-#ifdef ODP_MVNMP
-	/* Make sure that last command response is sent to host. */
-	nmp_schedule_all(nmp);
-#endif /* ODP_MVNMP */
-
-#endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
 
 return 0;
 

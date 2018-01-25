@@ -28,6 +28,10 @@
 #include <sys/ioctl.h>
 #include <linux/ethtool.h>
 
+#ifdef ODP_MVNMP_GUEST_MODE
+#include <nmp_guest_utils.h>
+#endif /* ODP_MVNMP_GUEST_MODE */
+
 #define USE_LPBK_SW_RECYLCE
 
 /* prefetch=2, tested to be optimal both for
@@ -78,6 +82,11 @@ struct link_info {
 	int speed;
 	int duplex;
 };
+
+#ifdef ODP_MVNMP_GUEST_MODE
+extern char *guest_prb_str;
+struct pp2_info pp2_info;
+#endif /* ODP_MVNMP_GUEST_MODE */
 
 static uint32_t	used_bpools = MVPP2_BPOOL_RSRV;
 static u16	used_hifs = MVPP2_HIF_RSRV;
@@ -590,6 +599,17 @@ static int mvpp2_init_global(void)
 	num_rss_tables = mvpp2_sysfs_param_get(file);
 	pp2_params.rss_tbl_reserved_map = (1 << num_rss_tables) - 1;
 
+#ifdef ODP_MVNMP_GUEST_MODE
+	guest_util_get_relations_info(guest_prb_str, &pp2_info);
+	if (pp2_info.num_ports) {
+		/* PP2 was configured on master. need to skip HW and get
+		 * relevant pools mask
+		 */
+		/* TODO - create pools mask */
+		pp2_params.skip_hw_init = 1;
+	}
+#endif /* ODP_MVNMP_GUEST_MODE */
+
 	err = pp2_init(&pp2_params);
 	if (err != 0) {
 		ODP_ERR("PP2 init failed (%d)!\n", err);
@@ -693,21 +713,29 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 		      const char *devname,
 		      odp_pool_t pool)
 {
+#ifdef ODP_MVNMP_GUEST_MODE
+	struct pp2_ppio_capabilities	ppio_capa;
+	struct pp2_bpool_capabilities	bpool_capa;
+	int				buf_num;
+	u32				i, max_num_buffs = 0, max_buf_len = 0;
+	struct pp2_bpool		*bpool;
+#else
 	struct pp2_bpool_params		bpool_params;
+	int				pool_id;
+#endif /* ODP_MVNMP_GUEST_MODE */
 	port_desc_t			port_desc;
 	char				name[15];
-	int				err, pool_id;
+	int				err;
 
 	if (strlen(devname) > sizeof(name) - 1) {
 		ODP_ERR("Port name (%s) too long!\n", devname);
 		return -1;
 	}
 
-	memset(&port_desc, 0, sizeof(port_desc));
-
 	/* Set port name to pktio_entry */
 	snprintf(pktio_entry->s.name, sizeof(pktio_entry->s.name), "%s", devname);
 
+	memset(&port_desc, 0, sizeof(port_desc));
 	port_desc.name = pktio_entry->s.name;
 	err = find_port_info(&port_desc);
 	if (err != 0) {
@@ -717,17 +745,87 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 
 	/* Init pktio entry */
 	memset(&pktio_entry->s.pkt_mvpp2, 0, sizeof(pkt_mvpp2_t));
+	pktio_entry->s.pkt_mvpp2.mtu = MVPP2_DFLT_MTU;
 
+	/* Associate this pool with this pktio */
+	pktio_entry->s.pkt_mvpp2.pool = pool;
+
+	init_capability(pktio_entry);
+
+#ifdef ODP_MVNMP_GUEST_MODE
+	/* TODO - create ppio-match and find if exist in pp2_info
+	 * currently assumes only one ppio exist and use its match */
+
+	for (i = 0; i < pp2_info.port_info[0].num_bpools; i++) {
+		struct pp2_ppio_bpool_info *bpool_info =
+			&pp2_info.port_info[0].bpool_info[i];
+
+		err = pp2_bpool_probe(bpool_info->bpool_name,
+				      guest_prb_str,
+				      &bpool);
+		if (err) {
+			ODP_ERR("pp2_bpool_probe failed for %s\n",
+				bpool_info->bpool_name);
+			return err;
+		}
+
+		err = pp2_bpool_get_capabilities(bpool, &bpool_capa);
+		if (err) {
+			ODP_ERR("pp2_bpool_get_capabilities failed for %s\n",
+				bpool_info->bpool_name);
+			return err;
+		}
+		ODP_PRINT("pp2-bpool %s was probed\n", bpool_info->bpool_name);
+		/* check pool's buf size and use the biggest one */
+		if (bpool_capa.buff_len > max_buf_len) {
+			max_buf_len = bpool_capa.buff_len;
+			max_num_buffs = bpool_capa.max_num_buffs;
+			pktio_entry->s.pkt_mvpp2.bpool = bpool;
+		}
+	}
+	err = pp2_ppio_probe(pp2_info.port_info[0].ppio_name, guest_prb_str,
+			     &pktio_entry->s.pkt_mvpp2.ppio);
+	if (err) {
+		ODP_ERR("pp2_ppio_probe failed for %s\n",
+			pp2_info.port_info[0].ppio_name);
+		return err;
+	}
+
+	err = pp2_ppio_get_capabilities(pktio_entry->s.pkt_mvpp2.ppio,
+					&ppio_capa);
+	if (err) {
+		ODP_ERR("pp2_ppio_get_capabilities failed for %s\n",
+			pp2_info.port_info[0].ppio_name);
+		return err;
+	}
+
+	pool_t *poole = pool_entry_from_hdl(pool);
+
+	if (poole->data_size < max_buf_len) {
+		ODP_ERR("pool buffer's size is too small!\n");
+		return -1;
+	}
+
+	buf_num = MIN((poole->num / ODP_CONFIG_PKTIO_ENTRIES), max_num_buffs);
+
+	/* Allocate maximum sized packets */
+	/* Allocate 'buf_num' of the SW pool into the HW pool;
+	 * i.e. allow only several ports sharing the same SW pool
+	 */
+	err = fill_bpool(pktio_entry->s.pkt_mvpp2.pool,
+			 pktio_entry->s.pkt_mvpp2.bpool, get_hif(get_thr_id()),
+			 buf_num, pktio_entry->s.pkt_mvpp2.mtu);
+	if (err != 0) {
+		ODP_ERR("can't fill port's pool with buffs!\n");
+		return -1;
+	}
+#else
 	/* Allocate a dedicated pool for this port */
 	pool_id = find_free_bpool();
 	if (pool_id < 0) {
 		ODP_ERR("free pool not found!\n");
 		return -1;
 	}
-
-	pktio_entry->s.pkt_mvpp2.pp_id = port_desc.pp_id;
-	pktio_entry->s.pkt_mvpp2.ppio_id = port_desc.ppio_id;
-	pktio_entry->s.pkt_mvpp2.mtu = MVPP2_DFLT_MTU;
 
 	memset(name, 0, sizeof(name));
 	snprintf(name, sizeof(name), "pool-%d:%d", port_desc.pp_id, pool_id);
@@ -745,11 +843,7 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 		ODP_ERR("BPool init failed!\n");
 		return -1;
 	}
-
-	/* Associate this pool with this pktio */
-	pktio_entry->s.pkt_mvpp2.pool = pool;
 	pktio_entry->s.pkt_mvpp2.bpool_id = pool_id;
-	init_capability(pktio_entry);
 
 	pktio_entry->s.pkt_mvpp2.sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (pktio_entry->s.pkt_mvpp2.sockfd == -1) {
@@ -763,6 +857,7 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 		ODP_ERR("Cannot get device MAC address (%d)!\n", err);
 		return -1;
 	}
+#endif /* ODP_MVNMP_GUEST_MODE */
 
 	ODP_DBG("port '%s' is opened\n", devname);
 
@@ -796,13 +891,21 @@ static int mvpp2_close(pktio_entry_t *pktio_entry)
 						    bufs_stockpile->ent,
 						    &bufs_stockpile->size);
 		}
-
+#ifdef ODP_MVNMP_GUEST_MODE
+		/* Deinit the PP2 port */
+		pp2_ppio_remove(mvpp2->ppio);
+#else
 		/* Deinit the PP2 port */
 		pp2_ppio_deinit(mvpp2->ppio);
+#endif /* ODP_MVNMP_GUEST_MODE */
 	}
 	flush_bpool(mvpp2->bpool, hif);
+#ifdef ODP_MVNMP_GUEST_MODE
+	pp2_bpool_remove(mvpp2->bpool);
+#else
 	pp2_bpool_deinit(mvpp2->bpool);
 	release_bpool(mvpp2->bpool_id);
+#endif /* ODP_MVNMP_GUEST_MODE */
 
 	ODP_DBG("port '%s' was closed\n", pktio_entry->s.name);
 	return 0;
@@ -810,6 +913,7 @@ static int mvpp2_close(pktio_entry_t *pktio_entry)
 
 static int mvpp2_start(pktio_entry_t *pktio_entry)
 {
+#ifndef ODP_MVNMP_GUEST_MODE
 	char				name[15];
 	port_desc_t			port_desc;
 	int				i, j, err;
@@ -822,12 +926,14 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 	int  buf_num, rx_queue_size;
 	struct pp2_hif	*hif = get_hif(get_thr_id());
 	struct link_info info;
+#endif /* !ODP_MVNMP_GUEST_MODE */
 
 	if (!pktio_entry->s.num_in_queue && !pktio_entry->s.num_out_queue) {
 		ODP_ERR("No input and output queues configured!\n");
 		return -1;
 	}
 
+#ifndef ODP_MVNMP_GUEST_MODE
 	if (!pktio_entry->s.pkt_mvpp2.ppio) {
 		port_desc.name = pktio_entry->s.name;
 		err = find_port_info(&port_desc);
@@ -944,6 +1050,7 @@ static int mvpp2_start(pktio_entry_t *pktio_entry)
 
 	pp2_ppio_set_loopback(pktio_entry->s.pkt_mvpp2.ppio, pktio_entry->s.config.enable_loop);
 	pp2_ppio_enable(pktio_entry->s.pkt_mvpp2.ppio);
+#endif /* !ODP_MVNMP_GUEST_MODE */
 
 	ODP_DBG("port '%s' is ready\n", pktio_entry->s.name);
 	return 0;
@@ -972,11 +1079,13 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 {
 	u8 i, max_num_hwrx_qs_per_inq;
 
+#ifndef ODP_MVNMP_GUEST_MODE
 	if (pktio_entry->s.pkt_mvpp2.ppio) {
 		ODP_ERR("Port already initialized, "
 			"configuration cannot be changed\n");
 		return -ENOTSUP;
 	}
+#endif /* !ODP_MVNMP_GUEST_MODE */
 
 	if ((param->classifier_enable == 1) && (param->hash_enable == 1)) {
 		ODP_ERR("Either classifier or hash may be enabled\n");
@@ -1038,10 +1147,12 @@ static int mvpp2_output_queues_config(pktio_entry_t *pktio_entry,
 
 	ODP_ASSERT(num_txq == pktio_entry->s.num_out_queue);
 
+#ifndef ODP_MVNMP_GUEST_MODE
 	if (pktio_entry->s.pkt_mvpp2.ppio) {
 		ODP_ERR("Port already initialized, configuration cannot be changed\n");
 		return -ENOTSUP;
 	}
+#endif /* !ODP_MVNMP_GUEST_MODE */
 
 	/* TODO: only support now RSS; no support for QoS; how to translate rxq_id to tc/qid???? */
 	max_num_hwrx_qs = MVPP2_MAX_NUM_TX_TCS_PER_PORT;
@@ -1680,13 +1791,17 @@ const pktio_if_ops_t mvpp2_pktio_ops = {
 	.config = mvpp2_config,
 	.input_queues_config = mvpp2_input_queues_config,
 	.output_queues_config = mvpp2_output_queues_config,
+#ifndef ODP_MVNMP_GUEST_MODE
 	.stats = mvpp2_stats,
 	.stats_reset = mvpp2_stats_reset,
+#endif /* !ODP_MVNMP_GUEST_MODE */
 	.pktin_ts_res = NULL,
 	.pktin_ts_from_ns = NULL,
 	.mtu_get = mvpp2_mtu_get,
+#ifndef ODP_MVNMP_GUEST_MODE
 	.promisc_mode_set = mvpp2_promisc_mode_set,
 	.promisc_mode_get = mvpp2_promisc_mode_get,
+#endif /* !ODP_MVNMP_GUEST_MODE */
 	.mac_get = mvpp2_mac_get,
 	.link_status = mvpp2_link_status,
 	.recv = mvpp2_recv,

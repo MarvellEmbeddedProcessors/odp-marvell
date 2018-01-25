@@ -242,6 +242,10 @@ if ODP_PKTIO_MVGIU
 __LIB__libodp_linux_la_SOURCES += pktio/mvgiu.c
 endif
 
+if ODP_MVNMP_GUEST_MODE
+__LIB__libodp_linux_la_SOURCES += pktio/nmp_guest_utils.c
+endif
+
 if HAVE_PCAP
 __LIB__libodp_linux_la_SOURCES += ../linux-generic/pktio/pcap.c
 endif
