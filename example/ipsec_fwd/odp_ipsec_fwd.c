@@ -87,7 +87,7 @@
 #define UNUSED			__attribute__((__unused__))
 
 /*#define IPSEC_DEBUG*/
-#define MEMMOVE_OPTIMIZED
+/*#define MEMMOVE_OPTIMIZED */
 
 #ifdef IPSEC_DEBUG
 #define dprintf printf
