@@ -91,6 +91,8 @@ struct pp2_info pp2_info;
 static uint32_t	used_bpools = MVPP2_BPOOL_RSRV;
 static u16	used_hifs = MVPP2_HIF_RSRV;
 
+static u64	sys_dma_high_addr;
+
 /* Global lock used for control containers and other accesses */
 static odp_ticketlock_t thrs_lock;
 /* Per thread unique ID used during run-time BM and HIF
@@ -473,6 +475,16 @@ static int fill_bpool(odp_pool_t	 pool,
 			continue;
 		}
 
+		if (i == 0)
+			sys_dma_high_addr = ((u64)pkt & SYS_DMA_HIGH_ADDR_MASK);
+
+		if (((u64)pkt & SYS_DMA_HIGH_ADDR_MASK) !=
+			sys_dma_high_addr) {
+			ODP_ERR("pkt(%p) upper addr should be %p\n",
+				pkt, (void *)sys_dma_high_addr);
+			continue;
+		}
+
 		if (!odp_packet_head(pkt)) {
 			ODP_ERR("Allocated invalid pkt (no buffer)!\n");
 			continue;
@@ -506,9 +518,19 @@ static int fill_bpool(odp_pool_t	 pool,
 		goto err;
 	}
 
+	/* set high_addr from first pkt */
+	sys_dma_high_addr = ((u64)pkt[i] & SYS_DMA_HIGH_ADDR_MASK);
+
 	for (; i < final_num; i++) {
 		if (pkt[i] == ODP_PACKET_INVALID) {
 			ODP_ERR("Allocated invalid pkt; skipping!\n");
+			continue;
+		}
+
+		if (((u64)pkt[i] & SYS_DMA_HIGH_ADDR_MASK) !=
+			sys_dma_high_addr) {
+			ODP_ERR("pkt(%p) upper addr should be %p\n",
+				pkt[i], (void *)sys_dma_high_addr);
 			continue;
 		}
 
@@ -573,7 +595,7 @@ static void flush_bpool(struct pp2_bpool *bpool, struct pp2_hif *hif)
 			ODP_DBG("flush_pool: p2_id=%d, pool_id=%d: Got buf (%d of %d) after %d retries\n",
 				bpool->pp2_id, bpool->id, i, buf_num, err);
 		}
-		pkt = (odp_packet_t)buff.cookie;
+		pkt = (odp_packet_t)(buff.cookie | sys_dma_high_addr);
 		pkt_hdr = odp_packet_hdr(pkt);
 		pkt_hdr->buf_hdr.ext_buf_free_cb = NULL;
 		odp_packet_free(pkt);
@@ -1431,6 +1453,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 {
 	odp_packet_hdr_t	*pkt_hdr;
 	odp_packet_t		 pkt;
+	u64			pkt_addr;
 	struct pp2_ppio_desc	 descs[MVPP2_MAX_RX_BURST_SIZE];
 	u16			 i, j, num, total_got, len;
 	enum pp2_inq_l3_type	 l3_type;
@@ -1466,13 +1489,15 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 				pref_desc = &descs[j + MVPP2_PREFETCH_SHIFT];
 				pref_addr =
 					pp2_ppio_inq_desc_get_cookie(pref_desc);
+				pref_addr |= sys_dma_high_addr;
 				pref_pkt_hdr =
 					odp_packet_hdr((odp_packet_t)pref_addr);
 				odp_prefetch(pref_pkt_hdr);
 				odp_prefetch(&pref_pkt_hdr->p);
 			}
-			pkt_table[total_got] = (odp_packet_t)
-				pp2_ppio_inq_desc_get_cookie(&descs[j]);
+			pkt_addr = pp2_ppio_inq_desc_get_cookie(&descs[j]) |
+				sys_dma_high_addr;
+			pkt_table[total_got] = (odp_packet_t)pkt_addr;
 			len = pp2_ppio_inq_desc_get_pkt_len(&descs[j]);
 
 			pkt = pkt_table[total_got];

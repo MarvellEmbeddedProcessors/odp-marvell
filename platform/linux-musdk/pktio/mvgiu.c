@@ -18,6 +18,8 @@
 #define MVGIU_PREFETCH_SHIFT		2
 #define MAX_BUFFER_GET_RETRIES		10000
 
+static u64	sys_dma_high_addr;
+
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 #define MVGIU_NO_HEADROOM
@@ -198,7 +200,17 @@ static int fill_bpool(odp_pool_t	pool,
 		goto fail;
 	}
 
+	/* set high_addr from first pkt */
+	sys_dma_high_addr = ((u64)pkt[0] & SYS_DMA_HIGH_ADDR_MASK);
+
 	for (i = 0; i < num; i++) {
+		if (((u64)pkt[i] & SYS_DMA_HIGH_ADDR_MASK) !=
+			sys_dma_high_addr) {
+			ODP_ERR("pkt(%p) upper addr should be %p\n",
+				pkt[i], (void *)sys_dma_high_addr);
+			continue;
+		}
+
 		pkt_hdr = odp_packet_hdr(pkt[i]);
 		if (pkt_hdr->buf_hdr.ext_buf_free_cb) {
 			ODP_ERR("pkt(%p)  ext_buf_free_cb was set; skipping\n",
@@ -248,7 +260,7 @@ static void flush_bpool(struct giu_bpool *bpool)
 				"(%d of %d) after %d retries\n",
 				bpool->id, i, buf_num, err);
 		}
-		pkt = (odp_packet_t)buff.cookie;
+		pkt = (odp_packet_t)(buff.cookie | sys_dma_high_addr);
 		pkt_hdr = odp_packet_hdr(pkt);
 		pkt_hdr->buf_hdr.ext_buf_free_cb = NULL;
 		odp_packet_free(pkt);
@@ -540,6 +552,7 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 	struct giu_gpio_desc	descs[MVGIU_MAX_RX_BURST_SIZE];
 	u16			i, j, num, total_got, len;
 	u8			tc, qid, num_qids, last_qid;
+	u64			pkt_addr;
 #ifdef MVGIU_SW_PARSE
 #endif
 
@@ -571,14 +584,16 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 				pref_desc = &descs[j + MVGIU_PREFETCH_SHIFT];
 				pref_addr =
 					giu_gpio_inq_desc_get_cookie(pref_desc);
+				pref_addr |= sys_dma_high_addr;
 				pref_pkt_hdr =
 					odp_packet_hdr((odp_packet_t)pref_addr);
 				odp_prefetch(pref_pkt_hdr);
 				odp_prefetch(&pref_pkt_hdr->p);
 			}
 
-			pkt_table[total_got] = (odp_packet_t)
-				giu_gpio_inq_desc_get_cookie(&descs[j]);
+			pkt_addr = giu_gpio_inq_desc_get_cookie(&descs[j]) |
+				sys_dma_high_addr;
+			pkt_table[total_got] = (odp_packet_t)pkt_addr;
 			len = giu_gpio_inq_desc_get_pkt_len(&descs[j]);
 
 			pkt = pkt_table[total_got];
