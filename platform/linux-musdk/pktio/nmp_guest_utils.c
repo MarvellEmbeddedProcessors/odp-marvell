@@ -12,7 +12,7 @@
 #define NMP_MAX_BUF_STR_LEN		256
 #define NMP_CFG_FILE_LOCAL_DIR		"./"
 #define NMP_CFG_FILE_VAR_DIR		"/var/"
-#define NMP_CFG_FILE_NAME_PREFIX	"musdk-nmp-config.txt"
+#define NMP_CFG_FILE_NAME_PREFIX	"odp-nmp-config.txt"
 #define SER_MAX_FILE_NAME	64
 #define SER_MAX_FILE_SIZE	(30 * 1024)
 

@@ -739,8 +739,6 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	struct pp2_ppio_capabilities	ppio_capa;
 	struct pp2_bpool_capabilities	bpool_capa;
 	int				buf_num;
-	u32				i, max_num_buffs = 0, max_buf_len = 0;
-	struct pp2_bpool		*bpool;
 #else
 	struct pp2_bpool_params		bpool_params;
 	int				pool_id;
@@ -778,33 +776,33 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 	/* TODO - create ppio-match and find if exist in pp2_info
 	 * currently assumes only one ppio exist and use its match */
 
-	for (i = 0; i < pp2_info.port_info[0].num_bpools; i++) {
-		struct pp2_ppio_bpool_info *bpool_info =
-			&pp2_info.port_info[0].bpool_info[i];
-
-		err = pp2_bpool_probe(bpool_info->bpool_name,
-				      guest_prb_str,
-				      &bpool);
-		if (err) {
-			ODP_ERR("pp2_bpool_probe failed for %s\n",
-				bpool_info->bpool_name);
-			return err;
-		}
-
-		err = pp2_bpool_get_capabilities(bpool, &bpool_capa);
-		if (err) {
-			ODP_ERR("pp2_bpool_get_capabilities failed for %s\n",
-				bpool_info->bpool_name);
-			return err;
-		}
-		ODP_PRINT("pp2-bpool %s was probed\n", bpool_info->bpool_name);
-		/* check pool's buf size and use the biggest one */
-		if (bpool_capa.buff_len > max_buf_len) {
-			max_buf_len = bpool_capa.buff_len;
-			max_num_buffs = bpool_capa.max_num_buffs;
-			pktio_entry->s.pkt_mvpp2.bpool = bpool;
-		}
+	if (pp2_info.port_info[0].num_bpools != 1) {
+		ODP_ERR("mvpp2 guest can only support one pool\n");
+		return -1;
 	}
+
+	struct pp2_ppio_bpool_info *bpool_info =
+		&pp2_info.port_info[0].bpool_info[0];
+
+	err = pp2_bpool_probe(bpool_info->bpool_name,
+			      guest_prb_str,
+			      &pktio_entry->s.pkt_mvpp2.bpool);
+	if (err) {
+		ODP_ERR("pp2_bpool_probe failed for %s\n",
+			bpool_info->bpool_name);
+		return err;
+	}
+
+	err = pp2_bpool_get_capabilities(pktio_entry->s.pkt_mvpp2.bpool,
+					 &bpool_capa);
+	if (err) {
+		ODP_ERR("pp2_bpool_get_capabilities failed for %s\n",
+			bpool_info->bpool_name);
+		return err;
+	}
+
+	ODP_PRINT("pp2-bpool %s was probed\n", bpool_info->bpool_name);
+
 	err = pp2_ppio_probe(pp2_info.port_info[0].ppio_name, guest_prb_str,
 			     &pktio_entry->s.pkt_mvpp2.ppio);
 	if (err) {
@@ -823,12 +821,13 @@ static int mvpp2_open(odp_pktio_t pktio ODP_UNUSED,
 
 	pool_t *poole = pool_entry_from_hdl(pool);
 
-	if (poole->data_size < max_buf_len) {
+	if (poole->data_size < bpool_capa.buff_len) {
 		ODP_ERR("pool buffer's size is too small!\n");
 		return -1;
 	}
 
-	buf_num = MIN((poole->num / ODP_CONFIG_PKTIO_ENTRIES), max_num_buffs);
+	buf_num = MIN((poole->num / ODP_CONFIG_PKTIO_ENTRIES),
+		      bpool_capa.max_num_buffs);
 
 	/* Allocate maximum sized packets */
 	/* Allocate 'buf_num' of the SW pool into the HW pool;
