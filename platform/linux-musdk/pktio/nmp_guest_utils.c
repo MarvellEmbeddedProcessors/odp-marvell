@@ -224,7 +224,8 @@ int nmp_read_cfg_file(char *cfg_file, struct nmp_params *params)
 			snprintf(file_name, sizeof(file_name), "%s%s", NMP_CFG_FILE_VAR_DIR, NMP_CFG_FILE_NAME_PREFIX);
 			rc = nmp_read_file_to_buf(file_name, buff, SER_MAX_FILE_SIZE);
 			if (rc) {
-				ODP_PRINT("nmp_config_file not found\n");
+				ODP_ERR("nmp config-file (%s) not found!\n",
+					file_name);
 				return rc;
 			}
 		}
