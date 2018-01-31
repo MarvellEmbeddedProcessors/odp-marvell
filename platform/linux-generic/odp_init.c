@@ -30,8 +30,6 @@
 
 #ifdef ODP_MVNMP
 struct nmp *nmp;
-
-void nmp_schedule_all(struct nmp *nmp);
 #endif /* ODP_MVNMP */
 
 struct odp_global_data_s odp_global_data;
@@ -96,14 +94,6 @@ static int nmp_init_all(void)
 
 	return ret;
 }
-
-void nmp_schedule_all(struct nmp *nmp)
-{
-	/* nmp gir instances schedule */
-	nmp_schedule(nmp, NMP_SCHED_MNG);
-	nmp_schedule(nmp, NMP_SCHED_RX);
-	nmp_schedule(nmp, NMP_SCHED_TX);
-}
 #endif /* ODP_MVNMP */
 
 #if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
@@ -131,7 +121,7 @@ static int wait_for_pf_init_done(void)
 	/* wait for regfile to be opened by NMP */
 	do {
 #ifdef ODP_MVNMP
-		nmp_schedule_all(nmp);
+		nmp_schedule(nmp, NMP_SCHED_MNG);
 #endif /* ODP_MVNMP */
 		fd = open(file_name, O_RDWR);
 		if (fd > 0)
@@ -147,7 +137,7 @@ static int wait_for_pf_init_done(void)
 
 #ifdef ODP_MVNMP
 	/* Make sure that last command response is sent to host. */
-	nmp_schedule_all(nmp);
+	nmp_schedule(nmp, NMP_SCHED_MNG);
 #endif /* ODP_MVNMP */
 
 	return 0;
