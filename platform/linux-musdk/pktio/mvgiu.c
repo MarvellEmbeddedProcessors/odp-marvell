@@ -385,9 +385,9 @@ static int mvgiu_open(odp_pktio_t pktio ODP_UNUSED,
 
 	pktio_entry->s.pkt_mvgiu.inqs[0].first_tc = 0;
 	pktio_entry->s.pkt_mvgiu.inqs[0].num_tcs = 1;
-	pktio_entry->s.pkt_mvgiu.inqs[0].first_qid = 0;
-	pktio_entry->s.pkt_mvgiu.inqs[0].next_qid = 0;
-	pktio_entry->s.pkt_mvgiu.inqs[0].num_qids = 1;
+	pktio_entry->s.pkt_mvgiu.inqs[0].qid = 0;
+	pktio_entry->s.pkt_mvgiu.inqs[0].next_tc =
+		pktio_entry->s.pkt_mvgiu.inqs[0].first_tc;
 
 	init_capability(pktio_entry);
 
@@ -542,7 +542,7 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 	pkt_mvgiu_t		*mvgiu = &pktio_entry->s.pkt_mvgiu;
 	struct giu_gpio_desc	descs[MVGIU_MAX_RX_BURST_SIZE];
 	u16			i, j, num, total_got, len;
-	u8			tc, qid, num_qids, last_qid;
+	u8			tc, qid, num_tcs, last_tc;
 	u64			pkt_addr;
 
 #ifdef ODP_MVNMP
@@ -561,10 +561,10 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 		odp_ticketlock_lock(&mvgiu->inqs[rxq_id].lock);
 
 	tc = mvgiu->inqs[rxq_id].first_tc;
-	qid = mvgiu->inqs[rxq_id].next_qid;
-	num_qids = mvgiu->inqs[rxq_id].num_qids;
-	last_qid = mvgiu->inqs[rxq_id].first_qid + num_qids - 1;
-	for (i = 0; (i < num_qids) && (total_got != num_pkts); i++) {
+	qid = mvgiu->inqs[rxq_id].qid;
+	num_tcs = mvgiu->inqs[rxq_id].num_tcs;
+	last_tc = mvgiu->inqs[rxq_id].first_tc + num_tcs - 1;
+	for (i = 0; (i < num_tcs) && (total_got != num_pkts); i++) {
 		num = num_pkts - total_got;
 		if (num > MVPP2_MAX_RX_BURST_SIZE)
 			num = MVPP2_MAX_RX_BURST_SIZE;
@@ -599,10 +599,10 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 			parse(pkt_hdr, len);
 			total_got++;
 		}
-		if (odp_unlikely(qid++ == last_qid))
-			qid = mvgiu->inqs[rxq_id].first_qid;
+		if (odp_unlikely(tc++ == last_tc))
+			tc = mvgiu->inqs[rxq_id].first_tc;
 	}
-	mvgiu->inqs[rxq_id].next_qid = qid;
+	mvgiu->inqs[rxq_id].next_tc = tc;
 	if (!mvgiu->inqs[rxq_id].lockless)
 		odp_ticketlock_unlock(&mvgiu->inqs[rxq_id].lock);
 

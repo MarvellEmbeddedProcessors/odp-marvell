@@ -690,8 +690,8 @@ static void init_capability(pktio_entry_t *pktio_entry)
 
 	memset(capa, 0, sizeof(odp_pktio_capability_t));
 
-	capa->max_input_queues = MVPP2_MAX_NUM_RX_QS_PER_PORT;
-	capa->max_output_queues = MVPP2_MAX_NUM_TX_TCS_PER_PORT;
+	capa->max_input_queues = MVPP2_MAX_NUM_QS_PER_RX_TC;
+	capa->max_output_queues = capa->max_input_queues;
 	capa->loop_supported = true;
 	capa->set_op.op.promisc_mode = true;
 	odp_pktio_config_init(&capa->config);
@@ -1098,7 +1098,7 @@ static int mvpp2_capability(pktio_entry_t *pktio_entry,
 static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 				     const odp_pktin_queue_param_t *param)
 {
-	u8 i, max_num_hwrx_qs_per_inq;
+	u8 i;
 
 #ifndef ODP_MVNMP_GUEST_MODE
 	if (pktio_entry->s.pkt_mvpp2.ppio) {
@@ -1118,34 +1118,23 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 	pktio_entry->s.pkt_mvpp2.hash_type =
 		mvpp2_rss_type_get(param->hash_enable, param->hash_proto);
 
-	/* each logical queue is mapped to one phy queue */
-	max_num_hwrx_qs_per_inq = 1;
 	for (i = 0; i < pktio_entry->s.pkt_mvpp2.num_inqs; i++) {
 		struct inq_info	*inq = &pktio_entry->s.pkt_mvpp2.inqs[i];
-
 		if (param->classifier_enable) {
-			/* Assumes classification is enabled
-			 * (TCs are bigger than 1), and RSS is disabled
-			 */
-			inq->first_tc = i;
-			inq->first_qid = 0;
-		} else {
-			/* Assumes classification is disabled (TC's is only 1),
-			 * and RSS may be enabled or not
+			/* Only one logical queue is configured. and it is
+			 * mapped to all TCs/queues
 			 */
 			inq->first_tc = 0;
-			inq->first_qid = (i * max_num_hwrx_qs_per_inq);
+			inq->next_tc = inq->first_tc;
+			inq->num_tcs = MVPP2_MAX_NUM_RX_TCS_PER_PORT;
+			inq->qid = 0;
+		} else {
+			/* each logical queue is mapped to one phy queue */
+			inq->first_tc = 0;
+			inq->next_tc = inq->first_tc;
+			inq->num_tcs = 1;
+			inq->qid = i;
 		}
-		inq->num_tcs = 1;
-		inq->next_qid = inq->first_qid;
-		inq->num_qids =	max_num_hwrx_qs_per_inq;
-		ODP_DBG("inqs[%d] first tc %d, num_tc %d, "
-			"first_qid %d, num_qids %d\n", i,
-		       inq->first_tc,
-		       inq->num_tcs,
-		       inq->first_qid,
-		       inq->num_qids);
-
 		/* Scheduler synchronizes input queue polls. Only single thread
 		* at a time polls a queue
 		*/
@@ -1156,32 +1145,6 @@ static int mvpp2_input_queues_config(pktio_entry_t *pktio_entry,
 			(param->op_mode == ODP_PKTIO_OP_MT_UNSAFE);
 		if (!inq->lockless)
 			odp_ticketlock_init(&inq->lock);
-	}
-
-	return 0;
-}
-
-static int mvpp2_output_queues_config(pktio_entry_t *pktio_entry,
-				      const odp_pktout_queue_param_t *param)
-{
-	u32 max_num_hwrx_qs, num_txq = param->num_queues;
-
-	ODP_ASSERT(num_txq == pktio_entry->s.num_out_queue);
-
-#ifndef ODP_MVNMP_GUEST_MODE
-	if (pktio_entry->s.pkt_mvpp2.ppio) {
-		ODP_ERR("Port already initialized, configuration cannot be changed\n");
-		return -ENOTSUP;
-	}
-#endif /* !ODP_MVNMP_GUEST_MODE */
-
-	/* TODO: only support now RSS; no support for QoS; how to translate rxq_id to tc/qid???? */
-	max_num_hwrx_qs = MVPP2_MAX_NUM_TX_TCS_PER_PORT;
-	if (pktio_entry->s.num_out_queue > max_num_hwrx_qs) {
-		ODP_ERR("Too many Out-Queues mapped (%d vs %d)!\n",
-			pktio_entry->s.num_out_queue,
-			max_num_hwrx_qs);
-		return -1;
 	}
 
 	return 0;
@@ -1458,7 +1421,7 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	enum pp2_inq_l3_type	 l3_type;
 	enum pp2_inq_l4_type	 l4_type;
 	u8			 l3_offset, l4_offset;
-	u8			 tc, qid, num_qids, last_qid;
+	u8			 tc, qid, num_tcs, last_tc;
 	pkt_mvpp2_t		*mvpp2 = &pktio_entry->s.pkt_mvpp2;
 	enum pp2_inq_desc_status desc_err;
 
@@ -1469,12 +1432,11 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 	if (!mvpp2->inqs[rxq_id].lockless)
 		odp_ticketlock_lock(&mvpp2->inqs[rxq_id].lock);
 
-	/* TODO: only support now RSS; no support for QoS; how to translate rxq_id to tc/qid???? */
 	tc = mvpp2->inqs[rxq_id].first_tc;
-	qid = mvpp2->inqs[rxq_id].next_qid;
-	num_qids = mvpp2->inqs[rxq_id].num_qids;
-	last_qid = mvpp2->inqs[rxq_id].first_qid + num_qids - 1;
-	for (i = 0; (i < num_qids) && (total_got != num_pkts); i++) {
+	qid = mvpp2->inqs[rxq_id].qid;
+	num_tcs = mvpp2->inqs[rxq_id].num_tcs;
+	last_tc = mvpp2->inqs[rxq_id].first_tc + num_tcs - 1;
+	for (i = 0; (i < num_tcs) && (total_got != num_pkts); i++) {
 		num = num_pkts - total_got;
 		if (num > MVPP2_MAX_RX_BURST_SIZE)
 			num = MVPP2_MAX_RX_BURST_SIZE;
@@ -1559,8 +1521,8 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 			if (len > _ODP_ETH_LEN_MAX)
 				pkt_hdr->p.input_flags.jumbo = 1;
 
-			parse_l2(pkt_hdr, &descs[i]);
-			parse_l3(pkt_hdr, l3_type, l3_offset, &descs[i]);
+			parse_l2(pkt_hdr, &descs[j]);
+			parse_l3(pkt_hdr, l3_type, l3_offset, &descs[j]);
 			parse_l4(pkt_hdr, l4_type, l4_offset);
 
 			if (pktio_entry->s.cls_enabled) {
@@ -1576,11 +1538,10 @@ static int mvpp2_recv(pktio_entry_t *pktio_entry,
 
 			total_got++;
 		}
-		if (!pktio_entry->s.cls_enabled &&
-		    odp_unlikely(qid++ == last_qid))
-			qid = mvpp2->inqs[rxq_id].first_qid;
+		if (odp_unlikely(tc++ == last_tc))
+			tc = mvpp2->inqs[rxq_id].first_tc;
 	}
-	mvpp2->inqs[rxq_id].next_qid = qid;
+	mvpp2->inqs[rxq_id].next_tc = tc;
 	if (!mvpp2->inqs[rxq_id].lockless)
 		odp_ticketlock_unlock(&mvpp2->inqs[rxq_id].lock);
 
@@ -1814,7 +1775,7 @@ const pktio_if_ops_t mvpp2_pktio_ops = {
 	.capability = mvpp2_capability,
 	.config = mvpp2_config,
 	.input_queues_config = mvpp2_input_queues_config,
-	.output_queues_config = mvpp2_output_queues_config,
+	.output_queues_config = NULL,
 #ifndef ODP_MVNMP_GUEST_MODE
 	.stats = mvpp2_stats,
 	.stats_reset = mvpp2_stats_reset,

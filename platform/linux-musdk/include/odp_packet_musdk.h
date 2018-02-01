@@ -100,9 +100,8 @@ struct mvgiu_tx_shadow_q {
 struct inq_info {
 	u8			 first_tc;
 	u8			 num_tcs;
-	u8			 first_qid;
-	u8			 next_qid;
-	u8			 num_qids;
+	u8			 next_tc;
+	u8			 qid; /* only one physical q per logical q */
 	int			 lockless;
 	odp_ticketlock_t	 lock;  /**< Queue lock */
 };

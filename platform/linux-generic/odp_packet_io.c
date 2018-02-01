@@ -1233,7 +1233,7 @@ int odp_pktin_queue_config(odp_pktio_t pktio,
 
 #ifdef ODP_NO_IGNORE_QS_CLASSIFY_EN_BUG_3289
 	if (param->classifier_enable)
-		num_queues = capa.max_input_queues;
+		num_queues = 1;
 #endif
 
 	if (num_queues == 0) {
