@@ -20,11 +20,10 @@
 #include <drivers/mv_giu_bpool.h>
 #include <drivers/mv_giu_gpio.h>
 #endif /* ODP_PKTIO_MVGIU */
-#if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
-#include <mng/mv_nmp.h>
+#ifdef ODP_MVNMP_GUEST_MODE
 #include <mng/mv_nmp_guest.h>
 #include <fcntl.h>
-#endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
+#endif /* ODP_MVNMP_GUEST_MODE */
 
 #define MAX_NUM_OUTQS_PER_CORE	MVPP2_MAX_NUM_TX_TCS_PER_PORT
 #define SHADOW_Q_MAX_SIZE	MVPP2_TXQ_SIZE	/* Should be power of 2 */
@@ -36,12 +35,10 @@
 ODP_STATIC_ASSERT((CHECK_IS_POWER2(SHADOW_Q_MAX_SIZE)), \
 	"SHADOW_Q_MAX_SIZE should be power of 2");
 
-#if defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE)
+#ifdef ODP_MVNMP_GUEST_MODE
 #define REGFILE_VAR_DIR         "/var/"
 #define REGFILE_NAME_PREFIX     "nic-pf-"
 #define REGFILE_MAX_FILE_NAME   64
-#endif /* defined(ODP_MVNMP) || defined(ODP_MVNMP_GUEST_MODE) */
-#ifdef ODP_MVNMP_GUEST_MODE
 /* NMP Guest ID */
 #define NMP_GUEST_ID		2
 /* NMP Guest Timeout (ms)*/

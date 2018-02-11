@@ -25,12 +25,6 @@ static u64	sys_dma_high_addr;
 #define MVGIU_NO_HEADROOM
 #define MVGIU_SW_PARSE
 
-#ifdef ODP_MVNMP
-#define MNG_SCHED_THRESH	100
-extern struct nmp *nmp;
-static int mng_trash;
-#endif
-
 static int mvgiu_free_buf(odp_buffer_t buf)
 {
 	odp_packet_t pkt = _odp_packet_from_buffer(buf);
@@ -545,14 +539,6 @@ static int mvgiu_recv(pktio_entry_t *pktio_entry,
 	u8			tc, qid, num_tcs, last_tc;
 	u64			pkt_addr;
 
-#ifdef ODP_MVNMP
-	if (mng_trash++ == MNG_SCHED_THRESH) {
-		nmp_schedule(nmp, NMP_SCHED_MNG);
-		mng_trash = 0;
-	}
-	nmp_schedule(nmp, NMP_SCHED_RX);
-#endif /* ODP_MVNMP */
-
 	total_got = 0;
 	if (num_pkts > (MVGIU_MAX_RX_BURST_SIZE * MVGIU_MAX_NUM_QS_PER_TC))
 		num_pkts = MVGIU_MAX_RX_BURST_SIZE * MVGIU_MAX_NUM_QS_PER_TC;
@@ -745,9 +731,6 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 		if (odp_unlikely(idx == MVGIU_MAX_TX_BURST_SIZE)) {
 			num = idx;
 			giu_gpio_send(pkt_mvgiu->gpio, tc, txq_id, descs, &num);
-#ifdef ODP_MVNMP
-			nmp_schedule(nmp, NMP_SCHED_TX);
-#endif /* ODP_MVNMP */
 			sent += num;
 			/* In case not all frames were send we need to decrease
 			 * the write_ind
@@ -766,9 +749,6 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 	}
 	num = idx;
 	giu_gpio_send(pkt_mvgiu->gpio, tc, txq_id, descs, &num);
-#ifdef ODP_MVNMP
-	nmp_schedule(nmp, NMP_SCHED_TX);
-#endif /* ODP_MVNMP */
 	sent += num;
 
 	/* In case not all frames were send we need to decrease the write_ind */
