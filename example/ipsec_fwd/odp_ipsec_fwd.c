@@ -273,6 +273,7 @@ struct ipsec_pktio_s {
 //	odph_ethaddr_t mac_addr;
 	odp_pktin_queue_t ifin[MAX_WORKERS];
 	odp_pktout_queue_t ifout[MAX_WORKERS];
+	odp_pktio_config_t config;
 };
 
 typedef enum {
@@ -636,7 +637,7 @@ void initialize_intf(char *intf, int if_index)
 	odp_pktio_t pktio;
 	odp_pktin_queue_t inq[MAX_WORKERS];
 	odp_pktout_queue_t outq[MAX_WORKERS];
-
+	odp_pktio_capability_t capa;
 	int ret;
 	uint8_t src_mac[ODPH_ETHADDR_LEN];
 	char src_mac_str[MAX_STRING];
@@ -659,21 +660,37 @@ void initialize_intf(char *intf, int if_index)
 		exit(EXIT_FAILURE);
 	}
 
+	if (odp_pktio_capability(pktio, &capa)) {
+		printf("Error: capability query failed\n");
+		exit(EXIT_FAILURE);
+	}
+
+	printf("RX CS offload capability: IPv4 %u, UDP %u, TCP %u, SCTP %u\n",
+	       capa.config.pktin.bit.ipv4_chksum,
+	       capa.config.pktin.bit.udp_chksum,
+	       capa.config.pktin.bit.tcp_chksum,
+	       capa.config.pktin.bit.sctp_chksum);
+	printf("TX CS offload capability: IPv4 %u, UDP %u, TCP %u, SCTP %u\n",
+	       capa.config.pktout.bit.ipv4_chksum,
+	       capa.config.pktout.bit.udp_chksum,
+	       capa.config.pktout.bit.tcp_chksum,
+	       capa.config.pktout.bit.sctp_chksum);
+
 	odp_pktio_config_t config;
 
 	odp_pktio_config_init(&config);
 	/* Checksum Validation */
-	config.pktin.bit.ipv4_chksum = 1;
-	config.pktin.bit.udp_chksum = 1;
-	config.pktin.bit.tcp_chksum = 1;
+	config.pktin.bit.ipv4_chksum  = capa.config.pktin.bit.ipv4_chksum;
+	config.pktin.bit.udp_chksum   = capa.config.pktin.bit.udp_chksum;
+	config.pktin.bit.tcp_chksum   = capa.config.pktin.bit.tcp_chksum;
 	/* Checksum  Generation*/
-	config.pktout.bit.ipv4_chksum = 1;
-	config.pktout.bit.udp_chksum = 1;
-	config.pktout.bit.tcp_chksum = 1;
+	config.pktout.bit.ipv4_chksum = capa.config.pktout.bit.ipv4_chksum;
+	config.pktout.bit.udp_chksum  = capa.config.pktout.bit.udp_chksum;
+	config.pktout.bit.tcp_chksum  = capa.config.pktout.bit.tcp_chksum;
 	/* Rx dropping on errors */
 	config.pktin.bit.drop_ipv4_err = 0;
-	config.pktin.bit.drop_udp_err = 0;
-	config.pktin.bit.drop_tcp_err = 0;
+	config.pktin.bit.drop_udp_err  = 0;
+	config.pktin.bit.drop_tcp_err  = 0;
 	odp_pktio_config(pktio, &config);
 
 	odp_pktin_queue_param_init(&pktin_param);
@@ -727,10 +744,21 @@ void initialize_intf(char *intf, int if_index)
 	}
 
 	/* Read the source MAC address for this interface */
+#ifdef ODP_PKTIO_MVGIU
+	if (strstr(intf, "giu") != NULL) {
+		src_mac[0] = 0;
+		src_mac[1] = 0;
+		src_mac[2] = 0;
+		src_mac[3] = 0;
+		src_mac[4] = 0;
+		src_mac[5] = 0xaa;
+		ret = ETH_ALEN;
+	} else
+#endif /* ODP_PKTIO_MVGIU */
 	ret = odp_pktio_mac_addr(pktio, src_mac, sizeof(src_mac));
 	if (ret <= 0) {
 		EXAMPLE_ERR("Error: failed during MAC address get for %s\n",
-			    intf);
+		    intf);
 		exit(EXIT_FAILURE);
 	}
 
@@ -741,7 +769,8 @@ void initialize_intf(char *intf, int if_index)
 	   odp_pktio_to_u64(pktio),
 	   mac_addr_str(src_mac_str, src_mac));
 
-	port_io_config[if_index].pktio    = pktio;
+	port_io_config[if_index].pktio  = pktio;
+	port_io_config[if_index].config = config;
 
 	for (wrkr = 0; wrkr < ipsec_workers_number; wrkr++) {
 		port_io_config[if_index].ifout[wrkr] = outq[wrkr];
@@ -1373,6 +1402,12 @@ int crypto_rx_handler_inbound(int worker_id)
 		}
 
 		output_ingoing_queue = port_io_config[after_crypto_ctx[pkt_index]->if_tx].ifout[worker_id];  /* take output queue after forwarding decision */
+
+		/* calc CS if port does not calc it in HW */
+		if (!port_io_config[after_crypto_ctx[pkt_index]->if_tx].
+					config.pktout.bit.ipv4_chksum)
+			odph_ipv4_csum_update(after_crypto_pkt_ingoing[
+					after_crypto_pkt_ingoing_index]);
 
 		free_pkt_ctx(after_crypto_ctx[pkt_index]);
 		after_crypto_pkt_ingoing_index++;
