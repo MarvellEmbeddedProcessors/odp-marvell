@@ -421,7 +421,8 @@ static inline int drop_err_pkts(odp_packet_t pkt_tbl[], unsigned num)
 	return dropped;
 }
 
-static inline void init_pool(odph_nat_pool_t* pool, uint16_t start, uint16_t end)
+static inline void init_nat_pool(odph_nat_pool_t *pool, uint16_t start,
+				 uint16_t end)
 {
 	uint16_t i;
 	odph_nat_node_t *ptr = NULL;
@@ -447,6 +448,11 @@ static inline void init_pool(odph_nat_pool_t* pool, uint16_t start, uint16_t end
 		ptr->next = ptr + 1;
 	}
 	ptr->next = NULL;
+}
+
+static void release_nat_pool(odph_nat_pool_t *pool)
+{
+	free(pool->node_buffer_head);
 }
 
 static inline uint16_t allocate_node_for_pool(odph_nat_pool_t* pool)
@@ -497,14 +503,32 @@ static inline odph_nat_wan_pool_t* alloc_wan_pool(uint32_t wan_ip, uint32_t star
 		if (!gbl_args->wan_pool[i].valid) {
 			gbl_args->wan_pool[i].valid = 1;
 			gbl_args->wan_pool[i].wan_ip = wan_ip;
-			init_pool(&gbl_args->wan_pool[i].udp_port_pool, start, end);
-			init_pool(&gbl_args->wan_pool[i].tcp_port_pool, start, end);
-			init_pool(&gbl_args->wan_pool[i].icmp_id_pool, start, end);
+			init_nat_pool(&gbl_args->wan_pool[i].udp_port_pool,
+				      start, end);
+			init_nat_pool(&gbl_args->wan_pool[i].tcp_port_pool,
+				      start, end);
+			init_nat_pool(&gbl_args->wan_pool[i].icmp_id_pool,
+				      start, end);
 			return &gbl_args->wan_pool[i];
 		}
 	}
 	printf("Too many wan ip configured, max number supported is %d\n", ODP_NAT_MAX_WAN_IP);
 	return NULL;
+}
+
+static void release_wan_pools(void)
+{
+	odph_nat_wan_pool_t *wan_pool;
+	int i;
+
+	for (i = 0; i < ODP_NAT_MAX_WAN_IP; i++) {
+		if (gbl_args->wan_pool[i].valid) {
+			wan_pool = &gbl_args->wan_pool[i];
+			release_nat_pool(&wan_pool->udp_port_pool);
+			release_nat_pool(&wan_pool->tcp_port_pool);
+			release_nat_pool(&wan_pool->icmp_id_pool);
+		}
+	}
 }
 
 static uint32_t ip_table_lookup(uint32_t ip)
@@ -3094,6 +3118,8 @@ int main(int argc, char *argv[])
 	free(gbl_args->appl.if_names);
 	free(gbl_args->appl.if_str);
 	free(gbl_args->appl.if_wan_str);
+
+	release_wan_pools();
 
 	if (odp_pool_destroy(pool)) {
 		printf("Error: pool destroy\n");
