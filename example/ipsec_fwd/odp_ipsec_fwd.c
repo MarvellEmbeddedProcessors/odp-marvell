@@ -187,6 +187,29 @@ do {						\
 #endif /* CHECK_CYCLES */
 
 /**
+ * Statistics
+ */
+typedef union {
+	struct {
+		/** Number of forwarded packets */
+		uint64_t packets;
+		/** Packets dropped due to receive error */
+		uint64_t rx_drops;
+		/** Packets dropped due to transmit error */
+		uint64_t tx_drops;
+	} s;
+
+	uint8_t padding[ODP_CACHE_LINE_SIZE];
+} stats_t ODP_ALIGNED_CACHE;
+
+/**
+ * Thread specific arguments
+ */
+typedef struct thread_args_t {
+	stats_t *stats;	/**< Pointer to per thread stats */
+} thread_args_t;
+
+/**
  * Parsed command line application arguments
  */
 typedef struct {
@@ -196,12 +219,18 @@ typedef struct {
 	crypto_api_mode_e mode;	/**< Crypto API preferred mode */
 	odp_pool_t pool;	/**< Buffer pool for packet IO */
 	char *if_str;		/**< Storage for interface names */
+	int time;		/**< Time in seconds to run. */
+	int accuracy;		/**< Number of seconds to get and print statistics */
 } appl_args_t;
 
 /**
  * Grouping of both parsed CL args and thread specific args - alloc together
  */
 typedef struct {
+	/** Per thread packet stats */
+	stats_t stats[MAX_WORKERS];
+	/** Per thread packet stats */
+	thread_args_t thread[MAX_WORKERS];
 	/** Application (parsed) arguments */
 	appl_args_t appl;
 } args_t;
@@ -309,6 +338,8 @@ static struct ipsec_pktio_s port_io_config[MAX_NB_PKTIO];
 
 static uint32_t if_mtu[MAX_NB_PKTIO];
 static int32_t ipsec_workers_number;
+
+static unsigned int glb_stop;
 
 #ifdef PKT_ECHO_SUPPORT
 static inline void swap_l2(char *buf)
@@ -753,6 +784,7 @@ void initialize_intf(char *intf, int if_index)
 		src_mac[4] = 0;
 		src_mac[5] = 0xaa;
 		ret = ETH_ALEN;
+
 	} else
 #endif /* ODP_PKTIO_MVGIU */
 	ret = odp_pktio_mac_addr(pktio, src_mac, sizeof(src_mac));
@@ -1536,13 +1568,14 @@ int crypto_rx_handler(int worker_id)
 }
 
 static
-void network_rx_handler(odp_packet_t *pkt_tbl, int pkts)
+int network_rx_handler(odp_packet_t *pkt_tbl, int pkts)
 {
 	int pkt_index;
 	struct pkt_ctx_t *ctx[MAX_PKT_BURST];
 	pkt_disposition_e rc;
 	odp_crypto_op_result_t result;
 	odp_bool_t skip = FALSE;
+	int good_packets = 0;
 
 	dprintf("ODP Main Loop 0: odp_pktin_recv  pkts=%d worker=%d\n", pkts, WORKER_ID_GET());
 
@@ -1602,7 +1635,9 @@ void network_rx_handler(odp_packet_t *pkt_tbl, int pkts)
 		else {
 			/* ////////////////////Decryption Phase1 - nothing to do, the packet will be handled after receiving from CRYPTO engine/////////////// */
 		}
+		good_packets++;
 	}
+	return good_packets;
 }
 
 
@@ -1634,6 +1669,8 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 	int i, pkt_idx;
 	odp_crypto_op_result_t result;
 	odp_event_t	crypto_events[MAX_PKT_BURST];
+	thread_args_t *thr_args = arg;
+	stats_t *stats = thr_args->stats;
 
 	ctx_buf_mng_init();
 
@@ -1672,7 +1709,10 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 
 		empty_rx_counters = 0;
 
-		network_rx_handler(pkt_tbl, pkts);
+		int good_pkts = network_rx_handler(pkt_tbl, pkts);
+
+		stats->s.packets += pkts;
+		stats->s.rx_drops   += pkts - good_pkts;
 
 		crypto_rx_handler(worker_id);
 	} while (!exit_threads);
@@ -1755,6 +1795,8 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"esp", required_argument, NULL, 'e'},		/* return 'e' */
 		{"tunnel", required_argument, NULL, 't'},       /* return 't' */
 		{"stream", required_argument, NULL, 's'},	/* return 's' */
+		{"wait_time", required_argument, NULL, 'w'},	/* return 'w' */
+		{"y_accuracy", required_argument, NULL, 'y'},	/* return 'y' */
 		{"help", no_argument, NULL, 'h'},		/* return 'h' */
 		{NULL, 0, NULL, 0}
 	};
@@ -1767,6 +1809,8 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	printf("\nParsing command line options\n");
 
 	appl_args->mode = 0;  /* turn off async crypto API by default */
+	appl_args->time = 0; /* loop forever if time to run is 0 */
+	appl_args->accuracy = 1; /* get and print pps stats second */
 
 	opterr = 0; /* do not issue errors on helper options */
 
@@ -1848,6 +1892,14 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 
 		case 's':
 			rc = create_stream_db_entry(optarg);
+			break;
+
+		case 'w':
+			appl_args->time = atoi(optarg);
+			break;
+
+		case 'y':
+			appl_args->accuracy = atoi(optarg);
 			break;
 
 		case 'h':
@@ -1949,6 +2001,9 @@ static void usage(char *progname)
 	       "\n"
 	       "Optional OPTIONS\n"
 	       "  -c, --count <number> CPU count.\n"
+	       "  -w, --wait_time  <number> Time in seconds to run statistics.\n"
+	       "  -y, --y_accuracy <number> Time in seconds get print statistics\n"
+	       "			   (default is 1 second).\n"
 	       "  -h, --help           Display help and exit.\n"
 	       " environment variables: ODP_IPSEC_USE_POLL_QUEUES\n"
 	       " to enable use of poll queues instead of scheduled (default)\n"
@@ -1997,6 +2052,69 @@ static void ipsec_deinit(void)
 }
 
 /**
+ *  Print statistics
+ *
+ * @param num_workers Number of worker threads
+ * @param thr_stats Pointer to stats storage
+ * @param duration Number of seconds to loop in
+ * @param timeout Number of seconds for stats calculation
+ *
+ */
+static int print_speed_stats(int num_workers, stats_t *thr_stats,
+			     int duration, int timeout)
+{
+	uint64_t pkts = 0;
+	uint64_t pkts_prev = 0;
+	uint64_t pps;
+	uint64_t rx_drops, tx_drops;
+	uint64_t maximum_pps = 0;
+	int i;
+	int elapsed = 0;
+	int stats_enabled = 1;
+	int loop_forever = (duration == 0);
+
+	if (timeout <= 0) {
+		stats_enabled = 0;
+		timeout = 1;
+	}
+	/* Wait for all threads to be ready*/
+	odp_barrier_wait(&sync_barrier);
+
+	do {
+		pkts = 0;
+		rx_drops = 0;
+		tx_drops = 0;
+
+		sleep(timeout);
+
+		for (i = 0; i < num_workers; i++) {
+			pkts += thr_stats[i].s.packets;
+			rx_drops += thr_stats[i].s.rx_drops;
+			tx_drops += thr_stats[i].s.tx_drops;
+		}
+		if (stats_enabled) {
+			pps = (pkts - pkts_prev) / timeout;
+			if (pps > maximum_pps)
+				maximum_pps = pps;
+			printf("%" PRIu64 " pps, %" PRIu64 " max pps, ",  pps,
+			       maximum_pps);
+
+			printf(" %" PRIu64 " rx drops, %" PRIu64 " tx drops\n",
+			       rx_drops, tx_drops);
+
+			pkts_prev = pkts;
+		}
+		elapsed += timeout;
+	} while (!glb_stop && (loop_forever || (elapsed < duration)));
+
+	if (stats_enabled)
+		printf("TEST RESULT: %" PRIu64 " maximum packets per second.\n",
+		       maximum_pps);
+
+	return pkts > 100 ? 0 : -1;
+}
+
+/**
  * ODP ipsec example main function
  */
 int
@@ -2010,7 +2128,7 @@ main(int argc, char *argv[])
 	char cpumaskstr[ODP_CPUMASK_STR_SIZE];
 	odp_pool_param_t params;
 	odp_instance_t instance;
-	odph_odpthread_params_t thr_params;
+	stats_t *stats;
 
 	odp_init_t odp_init_params;
 	odp_cpumask_t worker_cpu_mask;
@@ -2105,6 +2223,8 @@ main(int argc, char *argv[])
 	printf("first CPU:          %i\n", odp_cpumask_first(&cpumask));
 	printf("cpu mask:           %s\n", cpumaskstr);
 
+	stats = args->stats;
+
 	/* Create a barrier to synchronize thread startup */
 	odp_barrier_init(&sync_barrier, ipsec_workers_number);
 
@@ -2163,12 +2283,29 @@ main(int argc, char *argv[])
 	/*
 	 * Create and init worker threads
 	 */
-	memset(&thr_params, 0, sizeof(thr_params));
-	thr_params.start    = pktio_thread;
-	thr_params.arg      = NULL;
-	thr_params.thr_type = ODP_THREAD_WORKER;
-	thr_params.instance = instance;
-	odph_odpthreads_create(thread_tbl, &cpumask, &thr_params);
+	int cpu = odp_cpumask_first(&cpumask);
+
+	for (i = 0; i < ipsec_workers_number; ++i) {
+		odp_cpumask_t thd_mask;
+		odph_odpthread_params_t thr_params;
+
+		memset(&thr_params, 0, sizeof(thr_params));
+		thr_params.start    = pktio_thread;
+		thr_params.arg	    = &args->thread[i];
+		thr_params.thr_type = ODP_THREAD_WORKER;
+		thr_params.instance = instance;
+
+		args->thread[i].stats = &stats[i];
+
+		odp_cpumask_zero(&thd_mask);
+		odp_cpumask_set(&thd_mask, cpu);
+		odph_odpthreads_create(&thread_tbl[i], &thd_mask,
+				       &thr_params);
+		cpu = odp_cpumask_next(&cpumask, cpu);
+	}
+
+	int ret = print_speed_stats(ipsec_workers_number, stats,
+				args->appl.time, args->appl.accuracy);
 
 	/*
 	 * If there are streams attempt to verify them else
@@ -2216,15 +2353,17 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	printf("Exit\n\n");
+	printf("Exit %d\n\n", ret);
 
-	return 0;
+	return ret;
 }
 
 static void sig_int(int sig)
 {
-	if (sig == SIGINT || sig == SIGTERM)
+	if (sig == SIGINT || sig == SIGTERM) {
+		glb_stop = 1;
 		exit_threads = 1;
+	}
 }
 
 #ifdef IPSEC_DEBUG_SIG
@@ -2246,4 +2385,5 @@ static void sig_usr(int sig)
 
 	debug_flag |= tmp;
 }
+
 #endif
