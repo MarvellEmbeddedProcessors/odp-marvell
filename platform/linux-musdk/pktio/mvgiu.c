@@ -703,9 +703,13 @@ static int mvgiu_send(pktio_entry_t *pktio_entry,
 					      &l3_type, &l4_type);
 		if (odp_likely(!ret)) {
 			giu_gpio_outq_desc_set_proto_info(&descs[idx],
+							  GIU_DESC_ERR_OK,
+							  GIU_OUTQ_L2_UNICAST,
+							  GIU_VLAN_TAG_NONE,
+							  GIU_OUTQ_L3_UNICAST,
 							  l3_type,
-							  l4_type,
 							  pkt_hdr->p.l3_offset,
+							  l4_type,
 							  pkt_hdr->p.l4_offset);
 		}
 
