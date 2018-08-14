@@ -215,6 +215,13 @@ static inline void packet_init(odp_packet_hdr_t *pkt_hdr, uint32_t len)
 	* segment occupied by the allocated length.
 	*/
 	pkt_hdr->frame_len = len;
+
+#ifdef ODP_PACKET_DATA_NOT_RESET_BUG_3971
+	/* Fix bug: update seg[0] data pointer. */
+	/* Must be done when headroom was changed */
+	pkt_hdr->buf_hdr.seg[0].data = pkt_hdr->buf_hdr.base_data;
+#endif
+
 	pkt_hdr->headroom  = CONFIG_PACKET_HEADROOM;
 	pkt_hdr->tailroom  = CONFIG_PACKET_MAX_SEG_LEN - seg_len +
 			     CONFIG_PACKET_TAILROOM;

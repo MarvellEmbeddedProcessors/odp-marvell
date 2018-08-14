@@ -19,6 +19,7 @@ extern "C" {
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 #define ODP_NO_IGNORE_QS_CLASSIFY_EN_BUG_3289
+#define ODP_PACKET_DATA_NOT_RESET_BUG_3971
 
 /* TODO: MUSDK: get rid of the following lines and make them generic. */
 #define MVPP2_TOTAL_NUM_HIFS	9
