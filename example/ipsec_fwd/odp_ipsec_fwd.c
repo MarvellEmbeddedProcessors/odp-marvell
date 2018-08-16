@@ -132,6 +132,7 @@ static void sig_usr(int sig);
 #define SHM_CTX_POOL_SIZE      (SHM_CTX_POOL_BUF_COUNT * SHM_CTX_POOL_BUF_SIZE)
 
 #define MAX_WORKERS     4   /**< maximum number of worker threads */
+#define MNT_WORKERS     1   /**< addition workers used for barrier count calculation */
 
 #define POOL_SEG_LEN	1856
 #define MAX_PKT_BURST	32
@@ -1688,6 +1689,8 @@ int pktio_thread(void *arg EXAMPLE_UNUSED)
 
 	odp_barrier_wait(&sync_barrier);
 
+	dprintf("Start worker %d\n", WORKER_ID_GET());
+
 	/* Loop packets */
 	do {
 		++rx_port;
@@ -2226,7 +2229,7 @@ main(int argc, char *argv[])
 	stats = args->stats;
 
 	/* Create a barrier to synchronize thread startup */
-	odp_barrier_init(&sync_barrier, ipsec_workers_number);
+	odp_barrier_init(&sync_barrier, ipsec_workers_number + MNT_WORKERS);
 
 	/* Create packet buffer pool */
 	odp_pool_param_init(&params);
