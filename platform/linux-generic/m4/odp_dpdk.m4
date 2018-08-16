@@ -8,6 +8,11 @@ AC_HELP_STRING([--with-dpdk-path=DIR   path to dpdk build directory]),
     AM_CPPFLAGS="$AM_CPPFLAGS -isystem $DPDK_PATH/include/dpdk"
     pktio_dpdk_support=yes],[])
 
+dpdk_musdk_support=no
+AC_ARG_WITH([dpdk-musdk-path],
+AC_HELP_STRING([--with-dpdk-musdk-path=DIR   path to underlying MUSDK build directory]),
+    [DPDK_MUSDK_PATH=$withval dpdk_musdk_support=yes],[])
+
 ##########################################################################
 # Save and set temporary compilation flags
 ##########################################################################
@@ -41,6 +46,7 @@ then
     ODP_CFLAGS="$ODP_CFLAGS -DODP_PKTIO_DPDK"
     AM_LDFLAGS="$AM_LDFLAGS -L$DPDK_PATH/lib -Wl,$DPDK_PMD"
     if test $dpdk_musdk_support == yes; then
+        ODP_CFLAGS="$ODP_CFLAGS -DODP_MUSDK_DPDK"
         AM_LDFLAGS="$AM_LDFLAGS -L$DPDK_MUSDK_PATH/lib -Wl,-lmusdk"
     fi
     LIBS="$LIBS -ldpdk -ldl"

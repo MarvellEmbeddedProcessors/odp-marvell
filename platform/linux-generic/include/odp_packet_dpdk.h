@@ -17,7 +17,11 @@
 #include <rte_config.h>
 #include <rte_mbuf.h>
 
+#ifdef ODP_MUSDK_DPDK
+#define DPDK_MEMORY_MB 256
+#else
 #define DPDK_MEMORY_MB 512
+#endif /* ODP_MUSDK_DPDK */
 #define DPDK_NB_MBUF 16384
 #define DPDK_MBUF_BUF_SIZE RTE_MBUF_DEFAULT_BUF_SIZE
 #define DPDK_MEMPOOL_CACHE_SIZE 64
