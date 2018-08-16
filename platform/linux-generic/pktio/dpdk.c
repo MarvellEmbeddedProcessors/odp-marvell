@@ -28,6 +28,7 @@
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
 #include <rte_string_fns.h>
+#include <rte_version.h>
 
 static int disable_pktio; /** !0 this pktio disabled, 0 enabled */
 
@@ -189,6 +190,8 @@ static int dpdk_setup_port(pktio_entry_t *pktio_entry)
 	int ret;
 	pkt_dpdk_t *pkt_dpdk = &pktio_entry->s.pkt_dpdk;
 	struct rte_eth_rss_conf rss_conf;
+	struct rte_eth_dev_info dev_info;
+	struct rte_eth_conf local_port_conf;
 
 	/* Always set some hash functions to enable DPDK RSS hash calculation */
 	if (pkt_dpdk->hash.all_bits == 0) {
@@ -203,11 +206,8 @@ static int dpdk_setup_port(pktio_entry_t *pktio_entry)
 			.mq_mode = ETH_MQ_RX_RSS,
 			.max_rx_pkt_len = pkt_dpdk->data_room,
 			.split_hdr_size = 0,
-			.header_split   = 0,
-			.hw_ip_checksum = 0,
-			.hw_vlan_filter = 0,
-			.jumbo_frame    = 1,
-			.hw_strip_crc   = 0,
+			.ignore_offload_bitfield = 1,
+			.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 		},
 		.rx_adv_conf = {
 			.rss_conf = rss_conf,
@@ -217,9 +217,16 @@ static int dpdk_setup_port(pktio_entry_t *pktio_entry)
 		},
 	};
 
+	local_port_conf = port_conf;
+	rte_eth_dev_info_get(pkt_dpdk->port_id, &dev_info);
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		local_port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
 	ret = rte_eth_dev_configure(pkt_dpdk->port_id,
 				    pktio_entry->s.num_in_queue,
-				    pktio_entry->s.num_out_queue, &port_conf);
+				    pktio_entry->s.num_out_queue,
+				    &local_port_conf);
 	if (ret < 0) {
 		ODP_ERR("Failed to setup device: err=%d, port=%" PRIu8 "\n",
 			ret, pkt_dpdk->port_id);
@@ -242,8 +249,10 @@ static int dpdk_close(pktio_entry_t *pktio_entry)
 			rte_pktmbuf_free(pkt_dpdk->rx_cache[i].s.pkt[idx++]);
 	}
 
+#if RTE_VERSION < RTE_VERSION_NUM(17, 8, 0, 0)
 	if (pktio_entry->s.state != PKTIO_STATE_OPENED)
 		rte_eth_dev_close(pkt_dpdk->port_id);
+#endif /* RTE_VERSION < RTE_VERSION_NUM(...) */
 
 	rte_mempool_free(pkt_dpdk->pkt_pool);
 
@@ -333,7 +342,11 @@ static int dpdk_pktio_init(void)
 	}
 	ODP_DBG("rte_eal_init OK\n");
 
+#if RTE_VERSION < RTE_VERSION_NUM(17, 5, 0, 0)
 	rte_set_log_level(RTE_LOG_WARNING);
+#else
+	rte_log_set_global_level(RTE_LOG_WARNING);
+#endif /* RTE_VERSION < RTE_VERSION_NUM(...) */
 
 	i = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t),
 				   &original_cpuset);
@@ -539,6 +552,11 @@ static int dpdk_start(pktio_entry_t *pktio_entry)
 	uint8_t port_id = pkt_dpdk->port_id;
 	int ret;
 	unsigned i;
+	struct rte_eth_dev *dev;
+	struct rte_eth_dev_info dev_info;
+	struct rte_eth_conf local_port_conf;
+	struct rte_eth_rxconf rxq_conf;
+	struct rte_eth_txconf *txconf;
 
 	/* DPDK doesn't support nb_rx_q/nb_tx_q being 0 */
 	if (!pktio_entry->s.num_in_queue)
@@ -551,22 +569,37 @@ static int dpdk_start(pktio_entry_t *pktio_entry)
 		ODP_ERR("Failed to configure device\n");
 		return -1;
 	}
+
+	dev = &rte_eth_devices[port_id];
+	rte_eth_dev_info_get(port_id, &dev_info);
+	local_port_conf = dev->data->dev_conf;
+
+	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
+		local_port_conf.txmode.offloads |=
+			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+	txconf = &dev_info.default_txconf;
+	txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
+	txconf->offloads = local_port_conf.txmode.offloads;
+
 	/* Init TX queues */
 	for (i = 0; i < pktio_entry->s.num_out_queue; i++) {
 		ret = rte_eth_tx_queue_setup(port_id, i, DPDK_NM_TX_DESC,
 					     rte_eth_dev_socket_id(port_id),
-					     NULL);
+					     txconf);
 		if (ret < 0) {
 			ODP_ERR("Queue setup failed: err=%d, port=%" PRIu8 "\n",
 				ret, port_id);
 			return -1;
 		}
 	}
+
 	/* Init RX queues */
+	rxq_conf = dev_info.default_rxconf;
+	rxq_conf.offloads = dev->data->dev_conf.rxmode.offloads;
 	for (i = 0; i < pktio_entry->s.num_in_queue; i++) {
 		ret = rte_eth_rx_queue_setup(port_id, i, DPDK_NM_RX_DESC,
 					     rte_eth_dev_socket_id(port_id),
-					     NULL, pkt_dpdk->pkt_pool);
+					     &rxq_conf, pkt_dpdk->pkt_pool);
 		if (ret < 0) {
 			ODP_ERR("Queue setup failed: err=%d, port=%" PRIu8 "\n",
 				ret, port_id);

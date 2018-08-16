@@ -5,7 +5,7 @@ pktio_dpdk_support=no
 AC_ARG_WITH([dpdk-path],
 AC_HELP_STRING([--with-dpdk-path=DIR   path to dpdk build directory]),
     [DPDK_PATH=$withval
-    AM_CPPFLAGS="$AM_CPPFLAGS -msse4.2 -isystem $DPDK_PATH/include"
+    AM_CPPFLAGS="$AM_CPPFLAGS -isystem $DPDK_PATH/include/dpdk"
     pktio_dpdk_support=yes],[])
 
 ##########################################################################
@@ -40,7 +40,10 @@ then
 
     ODP_CFLAGS="$ODP_CFLAGS -DODP_PKTIO_DPDK"
     AM_LDFLAGS="$AM_LDFLAGS -L$DPDK_PATH/lib -Wl,$DPDK_PMD"
-    LIBS="$LIBS -ldpdk -ldl -lpcap"
+    if test $dpdk_musdk_support == yes; then
+        AM_LDFLAGS="$AM_LDFLAGS -L$DPDK_MUSDK_PATH/lib -Wl,-lmusdk"
+    fi
+    LIBS="$LIBS -ldpdk -ldl"
 else
     pktio_dpdk_support=no
 fi
